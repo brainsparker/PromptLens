@@ -79,6 +79,8 @@ open promptlens_results/latest/report.html
 
 That's it! You've just evaluated an LLM against a golden test set.
 
+**→ [Read the Complete Getting Started Guide](GETTING_STARTED.md)** for detailed workflows and use cases.
+
 ---
 
 ## Usage
