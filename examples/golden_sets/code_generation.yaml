@@ -1,0 +1,34 @@
+name: "Code Generation Evaluation"
+description: "Test cases for evaluating code generation capabilities"
+version: "1.0"
+
+test_cases:
+  - id: "code-001"
+    query: "Write a Python function to check if a number is prime"
+    expected_behavior: "Generate a correct, efficient prime-checking function with proper edge case handling"
+    category: "algorithms"
+    tags: ["python", "algorithms", "math"]
+
+  - id: "code-002"
+    query: "Create a React component that displays a list of todos with add/delete functionality"
+    expected_behavior: "Generate a functional React component with state management, event handlers, and proper JSX structure"
+    category: "frontend"
+    tags: ["react", "javascript", "frontend"]
+
+  - id: "code-003"
+    query: "Write a SQL query to find the top 5 customers by total purchase amount"
+    expected_behavior: "Generate correct SQL with JOIN, GROUP BY, ORDER BY, and LIMIT clauses"
+    category: "database"
+    tags: ["sql", "database", "queries"]
+
+  - id: "code-004"
+    query: "Implement a binary search algorithm in JavaScript"
+    expected_behavior: "Generate an efficient binary search with O(log n) complexity and correct boundary handling"
+    category: "algorithms"
+    tags: ["javascript", "algorithms", "search"]
+
+  - id: "code-005"
+    query: "Create a Python decorator that measures function execution time"
+    expected_behavior: "Generate a working decorator using functools.wraps and time module with proper implementation"
+    category: "python"
+    tags: ["python", "decorators", "performance"]

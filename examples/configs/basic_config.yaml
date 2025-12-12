@@ -1,0 +1,28 @@
+# Basic PromptLens Configuration
+# Single model evaluation with default settings
+
+golden_set: ./examples/golden_sets/customer_support.yaml
+
+models:
+  - name: "Claude 3.5 Sonnet"
+    provider: anthropic
+    model: claude-3-5-sonnet-20241022
+    temperature: 0.7
+    max_tokens: 1024
+
+judge:
+  provider: anthropic
+  model: claude-3-5-sonnet-20241022
+  temperature: 0.3
+
+execution:
+  parallel_requests: 3
+  retry_attempts: 3
+  timeout_seconds: 60
+
+output:
+  directory: ./promptlens_results
+  formats:
+    - html
+    - json
+  run_name: "Customer Support - Basic Evaluation"

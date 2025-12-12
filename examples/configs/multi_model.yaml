@@ -1,0 +1,47 @@
+# Multi-Model Comparison Configuration
+# Compare multiple models across the same test set
+
+golden_set: ./examples/golden_sets/code_generation.yaml
+
+models:
+  - name: "Claude 3.5 Sonnet"
+    provider: anthropic
+    model: claude-3-5-sonnet-20241022
+    temperature: 0.7
+    max_tokens: 2048
+
+  - name: "GPT-4 Turbo"
+    provider: openai
+    model: gpt-4-turbo-preview
+    temperature: 0.7
+    max_tokens: 2048
+
+  - name: "Gemini 1.5 Pro"
+    provider: google
+    model: gemini-1.5-pro
+    temperature: 0.7
+    max_tokens: 2048
+
+judge:
+  provider: anthropic
+  model: claude-3-5-sonnet-20241022
+  temperature: 0.3
+  criteria:
+    - correctness
+    - code_quality
+    - completeness
+    - efficiency
+
+execution:
+  parallel_requests: 5
+  retry_attempts: 3
+  timeout_seconds: 90
+
+output:
+  directory: ./promptlens_results
+  formats:
+    - html
+    - json
+    - csv
+    - md
+  run_name: "Code Generation - Multi-Model Comparison"

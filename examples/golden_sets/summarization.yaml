@@ -1,0 +1,34 @@
+name: "Text Summarization Evaluation"
+description: "Test cases for evaluating summarization capabilities"
+version: "1.0"
+
+test_cases:
+  - id: "sum-001"
+    query: "Summarize this article in 3 bullet points: 'Artificial intelligence is transforming industries worldwide. From healthcare to finance, AI systems are helping companies automate tasks, gain insights from data, and make better decisions. Machine learning models can now diagnose diseases, detect fraud, and personalize customer experiences at scale. However, challenges remain around ethics, bias, and ensuring AI systems are trustworthy and transparent.'"
+    expected_behavior: "Provide exactly 3 concise bullet points covering: AI's transformation across industries, specific applications (healthcare/finance/etc), and challenges (ethics/bias/trust)"
+    category: "summarization"
+    tags: ["summarization", "bullet-points"]
+
+  - id: "sum-002"
+    query: "Give me a one-sentence summary of quantum computing"
+    expected_behavior: "Provide a clear, accurate one-sentence explanation of quantum computing's core concept and purpose"
+    category: "summarization"
+    tags: ["summarization", "technical", "concise"]
+
+  - id: "sum-003"
+    query: "Summarize the key differences between Python and JavaScript"
+    expected_behavior: "Highlight 3-5 major differences covering syntax, use cases, and ecosystem"
+    category: "comparison"
+    tags: ["comparison", "programming", "technical"]
+
+  - id: "sum-004"
+    query: "What are the main benefits of cloud computing? Keep it brief."
+    expected_behavior: "List 3-4 core benefits (scalability, cost-efficiency, accessibility, reliability) in concise format"
+    category: "explanation"
+    tags: ["explanation", "technology", "brief"]
+
+  - id: "sum-005"
+    query: "Explain REST APIs to a beginner in 2-3 sentences"
+    expected_behavior: "Provide a simple, jargon-free explanation suitable for beginners, covering what REST APIs are and why they're used"
+    category: "explanation"
+    tags: ["explanation", "technical", "beginner-friendly"]

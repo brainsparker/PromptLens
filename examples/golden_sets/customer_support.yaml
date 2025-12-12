@@ -1,0 +1,34 @@
+name: "Customer Support Evaluation"
+description: "Test cases for customer support chatbot responses"
+version: "1.0"
+
+test_cases:
+  - id: "cs-001"
+    query: "How do I reset my password?"
+    expected_behavior: "Provide clear step-by-step instructions for password reset, including where to find the reset link"
+    category: "account_management"
+    tags: ["password", "account", "security"]
+
+  - id: "cs-002"
+    query: "What's your refund policy?"
+    expected_behavior: "Explain the 30-day refund policy clearly, including conditions and the process to request a refund"
+    category: "policy"
+    tags: ["refund", "policy", "billing"]
+
+  - id: "cs-003"
+    query: "My order hasn't arrived yet. What should I do?"
+    expected_behavior: "Ask for order number, provide tracking information lookup process, and offer resolution options"
+    category: "shipping"
+    tags: ["shipping", "tracking", "order"]
+
+  - id: "cs-004"
+    query: "Can I change my subscription plan?"
+    expected_behavior: "Explain how to upgrade/downgrade plans, mention any proration, and provide clear next steps"
+    category: "subscription"
+    tags: ["subscription", "billing", "plan"]
+
+  - id: "cs-005"
+    query: "I'm having trouble logging in"
+    expected_behavior: "Diagnose common login issues (wrong password, caps lock, browser cache) and provide troubleshooting steps"
+    category: "account_management"
+    tags: ["login", "account", "troubleshooting"]
