@@ -8,6 +8,7 @@ from promptlens.providers.base import BaseProvider
 from promptlens.providers.google import GoogleProvider
 from promptlens.providers.http import HTTPProvider
 from promptlens.providers.openai import OpenAIProvider
+from promptlens.providers.you import YouProvider
 
 # Registry of available providers
 PROVIDER_REGISTRY: Dict[str, Type[BaseProvider]] = {
@@ -15,6 +16,7 @@ PROVIDER_REGISTRY: Dict[str, Type[BaseProvider]] = {
     "openai": OpenAIProvider,
     "google": GoogleProvider,
     "http": HTTPProvider,
+    "you": YouProvider,
 }
 
 

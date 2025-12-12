@@ -58,6 +58,14 @@ python3 -m promptlens run examples/configs/multi_model.yaml
 
 Requires: ANTHROPIC_API_KEY, OPENAI_API_KEY, GOOGLE_API_KEY
 
+### Test You.com Models
+
+```bash
+python3 -m promptlens run examples/configs/you_config.yaml
+```
+
+Requires: YOU_API_KEY (get from https://api.you.com/)
+
 ### Test Local Model (Ollama)
 
 First install Ollama and pull a model:

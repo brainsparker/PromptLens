@@ -1,0 +1,40 @@
+# You.com AI API Configuration
+# Test various models through You.com's unified API
+
+golden_set: ./examples/golden_sets/summarization.yaml
+
+models:
+  - name: "You.com GPT-4"
+    provider: you
+    model: gpt-4
+    temperature: 0.7
+    max_tokens: 1024
+
+  - name: "You.com Claude"
+    provider: you
+    model: claude-3-5-sonnet
+    temperature: 0.7
+    max_tokens: 1024
+
+  - name: "You.com Llama"
+    provider: you
+    model: llama-3-70b
+    temperature: 0.7
+    max_tokens: 1024
+
+judge:
+  provider: anthropic
+  model: claude-3-5-sonnet-20241022
+  temperature: 0.3
+
+execution:
+  parallel_requests: 3
+  retry_attempts: 3
+  timeout_seconds: 60
+
+output:
+  directory: ./promptlens_results
+  formats:
+    - html
+    - json
+  run_name: "You.com Multi-Model Comparison"

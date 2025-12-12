@@ -11,7 +11,7 @@ PromptLens runs golden test sets against multiple models, scores outputs using L
 
 ## Features
 
-- **Multi-Provider Support** - Test Anthropic (Claude), OpenAI (GPT), Google (Gemini), and local models (Ollama, LM Studio)
+- **Multi-Provider Support** - Test Anthropic (Claude), OpenAI (GPT), Google (Gemini), You.com, and local models (Ollama, LM Studio)
 - **LLM-as-Judge Scoring** - Automated evaluation using another LLM with configurable criteria
 - **Cost & Latency Tracking** - Monitor per-query costs and response times across models
 - **Beautiful Reports** - Interactive HTML reports with charts, comparisons, and detailed results
@@ -44,7 +44,7 @@ poetry install
 ### Requirements
 
 - Python 3.9+
-- API keys for the providers you want to use (Anthropic, OpenAI, Google)
+- API keys for the providers you want to use (Anthropic, OpenAI, Google, You.com)
 
 ---
 
@@ -60,6 +60,7 @@ cp .env.example .env
 export ANTHROPIC_API_KEY=sk-ant-...
 export OPENAI_API_KEY=sk-...
 export GOOGLE_API_KEY=...
+export YOU_API_KEY=...
 ```
 
 ### 2. Run an example evaluation
@@ -216,6 +217,26 @@ models:
 **Supported Models:**
 - `gemini-1.5-pro`, `gemini-1.5-flash`
 - `gemini-pro`
+
+### You.com AI
+
+```yaml
+models:
+  - name: "You.com GPT-4"
+    provider: you
+    model: gpt-4
+    temperature: 0.7
+    max_tokens: 1024
+```
+
+**Supported Models:**
+- `gpt-4`, `claude-3-5-sonnet`, `llama-3-70b`
+- Any model available through You.com's unified API
+
+**Setup:**
+1. Get API key from: https://api.you.com/
+2. Set `YOU_API_KEY` environment variable
+3. Use model names as specified in You.com docs
 
 ### Local Models (Ollama, LM Studio)
 
