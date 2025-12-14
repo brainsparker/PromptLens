@@ -3,12 +3,13 @@
 import logging
 import os
 from datetime import datetime
-from typing import Any
+from typing import Any, List, Optional
 
 from anthropic import AsyncAnthropic
 
 from promptlens.models.config import ProviderConfig
 from promptlens.models.result import ModelResponse
+from promptlens.models.tools import ToolCall, ToolDefinition
 from promptlens.providers.base import BaseProvider
 from promptlens.utils.cost import calculate_cost
 from promptlens.utils.retry import retry_with_exponential_backoff
@@ -41,11 +42,17 @@ class AnthropicProvider(BaseProvider):
 
         self.client = AsyncAnthropic(api_key=api_key)
 
-    async def generate(self, prompt: str, **kwargs: Any) -> ModelResponse:
+    async def generate(
+        self,
+        prompt: str,
+        tools: Optional[List[ToolDefinition]] = None,
+        **kwargs: Any
+    ) -> ModelResponse:
         """Generate a response from Claude.
 
         Args:
             prompt: The input prompt
+            tools: Optional list of tools/functions the model can use
             **kwargs: Additional parameters (overrides config)
 
         Returns:
@@ -53,21 +60,46 @@ class AnthropicProvider(BaseProvider):
         """
         async def _make_request() -> ModelResponse:
             async with measure_time() as timer:
-                response = await self.client.messages.create(
-                    model=self.config.model,
-                    max_tokens=kwargs.get("max_tokens", self.config.max_tokens),
-                    temperature=kwargs.get("temperature", self.config.temperature),
-                    messages=[
+                # Build request parameters
+                request_params = {
+                    "model": self.config.model,
+                    "max_tokens": kwargs.get("max_tokens", self.config.max_tokens),
+                    "temperature": kwargs.get("temperature", self.config.temperature),
+                    "messages": [
                         {
                             "role": "user",
                             "content": prompt,
                         }
                     ],
                     **self.config.additional_params,
-                )
+                }
 
-                # Extract content
-                content = response.content[0].text if response.content else ""
+                # Add tools if provided
+                if tools:
+                    request_params["tools"] = [
+                        tool.to_anthropic_format() for tool in tools
+                    ]
+
+                response = await self.client.messages.create(**request_params)
+
+                # Extract content (text blocks only)
+                content_parts = []
+                tool_calls = []
+
+                for block in response.content:
+                    if block.type == "text":
+                        content_parts.append(block.text)
+                    elif block.type == "tool_use":
+                        # Capture tool call
+                        tool_calls.append(
+                            ToolCall(
+                                id=block.id,
+                                name=block.name,
+                                arguments=block.input,
+                            )
+                        )
+
+                content = "\n".join(content_parts) if content_parts else ""
 
                 # Extract token usage
                 prompt_tokens = response.usage.input_tokens
@@ -92,6 +124,8 @@ class AnthropicProvider(BaseProvider):
                     latency_ms=timer.elapsed_ms,
                     cost_usd=cost,
                     timestamp=datetime.utcnow(),
+                    tool_calls=tool_calls,
+                    stop_reason=response.stop_reason,
                 )
 
         try:
@@ -137,3 +171,11 @@ class AnthropicProvider(BaseProvider):
             "anthropic"
         """
         return "anthropic"
+
+    def supports_tools(self) -> bool:
+        """Check if this provider supports tool/function calling.
+
+        Returns:
+            True - Anthropic Claude models support tool calling
+        """
+        return True

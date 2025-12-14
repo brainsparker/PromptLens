@@ -1,0 +1,51 @@
+# Tool Calling Evaluation Configuration
+# Evaluates LLM tool/function calling capabilities across models
+
+golden_set: ./examples/golden_sets/tool_calling.yaml
+
+models:
+  # Anthropic Claude - Best tool calling support
+  - name: "Claude 3.5 Sonnet"
+    provider: anthropic
+    model: claude-3-5-sonnet-20241022
+    temperature: 0.3  # Lower temperature for more consistent tool use
+    max_tokens: 2048
+
+  # OpenAI GPT-4 - Excellent tool calling
+  - name: "GPT-4 Turbo"
+    provider: openai
+    model: gpt-4-turbo-preview
+    temperature: 0.3
+    max_tokens: 2048
+
+  # OpenAI GPT-3.5 - Good tool calling at lower cost
+  - name: "GPT-3.5 Turbo"
+    provider: openai
+    model: gpt-3.5-turbo
+    temperature: 0.3
+    max_tokens: 2048
+
+# Judge configuration for tool evaluation
+judge:
+  provider: anthropic
+  model: claude-3-5-sonnet-20241022
+  temperature: 0.2  # Very low temperature for consistent scoring
+  # Tool evaluation uses multi-criteria scoring:
+  # - Parameter Correctness (1-5)
+  # - Tool Selection (1-5)
+  # - Tool Efficiency (1-5)
+  # - Final Answer Quality (1-5)
+  # - Overall Score (1-5)
+
+execution:
+  parallel_requests: 3
+  retry_attempts: 3
+  timeout_seconds: 60
+
+output:
+  directory: ./promptlens_results
+  formats:
+    - html  # Interactive report with tool call details
+    - json  # Complete data including tool evaluations
+    - csv   # Flattened data for spreadsheet analysis
+  run_name: "Tool Calling Evaluation - Multi-Model Comparison"

@@ -1,10 +1,11 @@
 """Base provider interface for LLM providers."""
 
 from abc import ABC, abstractmethod
-from typing import Optional
+from typing import List, Optional
 
 from promptlens.models.config import ProviderConfig
 from promptlens.models.result import ModelResponse
+from promptlens.models.tools import ToolDefinition
 
 
 class BaseProvider(ABC):
@@ -29,12 +30,14 @@ class BaseProvider(ABC):
     async def generate(
         self,
         prompt: str,
+        tools: Optional[List[ToolDefinition]] = None,
         **kwargs: any
     ) -> ModelResponse:
         """Generate a response from the model.
 
         Args:
             prompt: The input prompt
+            tools: Optional list of tools/functions the model can use
             **kwargs: Additional provider-specific parameters
 
         Returns:
@@ -80,3 +83,11 @@ class BaseProvider(ABC):
         """
         if not self.config.model:
             raise ValueError("Model is required in provider configuration")
+
+    def supports_tools(self) -> bool:
+        """Check if this provider supports tool/function calling.
+
+        Returns:
+            True if the provider supports tools, False otherwise
+        """
+        return False  # Default: most providers don't support tools yet

@@ -1,0 +1,219 @@
+name: "Tool Calling Evaluation"
+description: "Test cases for evaluating LLM tool/function calling capabilities"
+version: "1.0"
+
+test_cases:
+  # Simple single tool call
+  - id: "tool-001"
+    query: "What's the weather in San Francisco?"
+    expected_behavior: "Call get_weather tool with location='San Francisco', then provide a natural language response"
+    category: "single_tool"
+    tags: ["weather", "simple"]
+    evaluation_mode: "tool_and_answer"
+
+    tools:
+      - name: "get_weather"
+        description: "Get current weather for a location"
+        parameters:
+          location:
+            type: "string"
+            description: "City name or location"
+            required: true
+          units:
+            type: "string"
+            description: "Temperature units (celsius or fahrenheit)"
+            required: false
+
+    expected_tool_calls:
+      - name: "get_weather"
+        arguments:
+          location: "San Francisco"
+        allow_extra_params: true
+
+  # Tool with multiple parameters
+  - id: "tool-002"
+    query: "Search for Italian restaurants in New York that are open now"
+    expected_behavior: "Call search_places with correct parameters for type, location, and open_now"
+    category: "multi_param"
+    tags: ["search", "restaurants"]
+    evaluation_mode: "tool_and_answer"
+
+    tools:
+      - name: "search_places"
+        description: "Search for places matching criteria"
+        parameters:
+          query:
+            type: "string"
+            description: "Search query"
+            required: true
+          location:
+            type: "string"
+            description: "Location to search in"
+            required: true
+          type:
+            type: "string"
+            description: "Type of place (restaurant, hotel, etc.)"
+            required: false
+          open_now:
+            type: "boolean"
+            description: "Filter to places currently open"
+            required: false
+
+    expected_tool_calls:
+      - name: "search_places"
+        arguments:
+          query: "Italian restaurants"
+          location: "New York"
+          type: "restaurant"
+          open_now: true
+
+  # Math calculation
+  - id: "tool-003"
+    query: "Calculate 1234 multiplied by 5678"
+    expected_behavior: "Use calculator tool to compute the multiplication"
+    category: "calculation"
+    tags: ["math", "calculator"]
+    evaluation_mode: "tool_and_answer"
+
+    tools:
+      - name: "calculator"
+        description: "Perform mathematical calculations"
+        parameters:
+          operation:
+            type: "string"
+            description: "Math operation (add, subtract, multiply, divide)"
+            required: true
+          a:
+            type: "number"
+            description: "First number"
+            required: true
+          b:
+            type: "number"
+            description: "Second number"
+            required: true
+
+    expected_tool_calls:
+      - name: "calculator"
+        arguments:
+          operation: "multiply"
+          a: 1234
+          b: 5678
+        strict_matching: false
+
+  # Sequential tool calls
+  - id: "tool-004"
+    query: "Find the weather in Paris and convert the temperature from Celsius to Fahrenheit"
+    expected_behavior: "First call get_weather, then call convert_temperature"
+    category: "sequential"
+    tags: ["weather", "conversion", "multi-step"]
+    evaluation_mode: "tool_and_answer"
+
+    tools:
+      - name: "get_weather"
+        description: "Get current weather for a location"
+        parameters:
+          location:
+            type: "string"
+            description: "City name"
+            required: true
+
+      - name: "convert_temperature"
+        description: "Convert temperature between units"
+        parameters:
+          value:
+            type: "number"
+            description: "Temperature value"
+            required: true
+          from_unit:
+            type: "string"
+            description: "Source unit (celsius or fahrenheit)"
+            required: true
+          to_unit:
+            type: "string"
+            description: "Target unit (celsius or fahrenheit)"
+            required: true
+
+    expected_tool_calls:
+      - name: "get_weather"
+        arguments:
+          location: "Paris"
+      - name: "convert_temperature"
+        arguments:
+          from_unit: "celsius"
+          to_unit: "fahrenheit"
+        allow_extra_params: true
+
+  # Tool selection test - multiple available tools
+  - id: "tool-005"
+    query: "Send an email to john@example.com saying the meeting is at 3pm"
+    expected_behavior: "Choose send_email tool (not send_sms or make_call)"
+    category: "tool_selection"
+    tags: ["communication", "email"]
+    evaluation_mode: "tool_and_answer"
+
+    tools:
+      - name: "send_email"
+        description: "Send an email message"
+        parameters:
+          to:
+            type: "string"
+            description: "Recipient email address"
+            required: true
+          subject:
+            type: "string"
+            description: "Email subject"
+            required: true
+          body:
+            type: "string"
+            description: "Email body text"
+            required: true
+
+      - name: "send_sms"
+        description: "Send an SMS text message"
+        parameters:
+          phone_number:
+            type: "string"
+            description: "Recipient phone number"
+            required: true
+          message:
+            type: "string"
+            description: "SMS message text"
+            required: true
+
+      - name: "make_call"
+        description: "Make a phone call"
+        parameters:
+          phone_number:
+            type: "string"
+            description: "Number to call"
+            required: true
+
+    expected_tool_calls:
+      - name: "send_email"
+        arguments:
+          to: "john@example.com"
+        allow_extra_params: true
+
+  # Edge case: No tool needed
+  - id: "tool-006"
+    query: "What is 2+2?"
+    expected_behavior: "Answer directly without using calculator tool"
+    category: "no_tool_needed"
+    tags: ["efficiency", "simple_math"]
+    evaluation_mode: "tool_and_answer"
+
+    tools:
+      - name: "calculator"
+        description: "Perform complex mathematical calculations"
+        parameters:
+          operation:
+            type: "string"
+            required: true
+          a:
+            type: "number"
+            required: true
+          b:
+            type: "number"
+            required: true
+
+    expected_tool_calls: []  # No tools should be called for simple math

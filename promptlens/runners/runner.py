@@ -198,8 +198,19 @@ class Runner:
             EvaluationResult
         """
         async with self.semaphore:
-            # Generate response
-            model_response = await provider.generate(test_case.query)
+            # Check if tools are requested but provider doesn't support them
+            if test_case.tools and not provider.supports_tools():
+                logger.warning(
+                    f"Test case '{test_case.id}' requires tools, but provider "
+                    f"'{provider.provider_name}' does not support tool calling. "
+                    "Tool evaluation will not work properly."
+                )
+
+            # Generate response (pass tools if provided)
+            model_response = await provider.generate(
+                test_case.query,
+                tools=test_case.tools if test_case.tools else None
+            )
 
             # Judge the response (only if generation succeeded)
             judge_score = None

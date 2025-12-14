@@ -12,6 +12,7 @@ PromptLens runs golden test sets against multiple models, scores outputs using L
 ## Features
 
 - **Multi-Provider Support** - Test Anthropic (Claude), OpenAI (GPT), Google (Gemini), You.com, and local models (Ollama, LM Studio)
+- **Tool/Function Calling Evaluation** - Test tool usage with automatic + LLM judge scoring across 5 criteria
 - **LLM-as-Judge Scoring** - Automated evaluation using another LLM with configurable criteria
 - **Cost & Latency Tracking** - Monitor per-query costs and response times across models
 - **Beautiful Reports** - Interactive HTML reports with charts, comparisons, and detailed results
@@ -391,6 +392,52 @@ Evaluate multi-step agent workflows:
 2. Implement agent logic
 3. Evaluate with PromptLens
 4. Iterate on tools and prompting
+
+### Tool/Function Calling Evaluation
+
+Test how well models use tools and functions:
+
+1. Define tools with JSON schema
+2. Specify expected tool calls
+3. Evaluate parameter correctness, tool selection, and efficiency
+4. Get multi-criteria scores with detailed feedback
+
+**Example test case:**
+```yaml
+- id: "tool-001"
+  query: "What's the weather in San Francisco?"
+  expected_behavior: "Call get_weather with location='San Francisco'"
+  evaluation_mode: "tool_and_answer"
+
+  tools:
+    - name: "get_weather"
+      description: "Get current weather"
+      parameters:
+        location:
+          type: "string"
+          required: true
+
+  expected_tool_calls:
+    - name: "get_weather"
+      arguments:
+        location: "San Francisco"
+```
+
+**Evaluation includes:**
+- Automatic comparison (expected vs actual tool calls)
+- Parameter correctness scoring (1-5)
+- Tool selection accuracy (1-5)
+- Tool usage efficiency (1-5)
+- Final answer quality (1-5)
+
+**Supported providers:** Anthropic Claude, OpenAI GPT (other providers will warn gracefully)
+
+**Try it:**
+```bash
+promptlens run examples/configs/tool_evaluation.yaml
+```
+
+See [examples/golden_sets/tool_calling.yaml](examples/golden_sets/tool_calling.yaml) for complete examples.
 
 ---
 

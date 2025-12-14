@@ -2,12 +2,13 @@
 
 import logging
 from datetime import datetime
-from typing import Any, Dict
+from typing import Any, Dict, List, Optional
 
 import aiohttp
 
 from promptlens.models.config import ProviderConfig
 from promptlens.models.result import ModelResponse
+from promptlens.models.tools import ToolDefinition
 from promptlens.providers.base import BaseProvider
 from promptlens.utils.retry import retry_with_exponential_backoff
 from promptlens.utils.timing import measure_time
@@ -34,16 +35,29 @@ class HTTPProvider(BaseProvider):
 
         self.endpoint = config.endpoint
 
-    async def generate(self, prompt: str, **kwargs: Any) -> ModelResponse:
+    async def generate(
+        self,
+        prompt: str,
+        tools: Optional[List[ToolDefinition]] = None,
+        **kwargs: Any
+    ) -> ModelResponse:
         """Generate a response from the HTTP endpoint.
 
         Args:
             prompt: The input prompt
+            tools: Optional list of tools (not supported yet, will be ignored with warning)
             **kwargs: Additional parameters
 
         Returns:
             ModelResponse with generated content and metadata
         """
+        # Log warning if tools are provided (not yet supported for generic HTTP)
+        if tools:
+            logger.warning(
+                f"{self.provider_name} provider does not support tool calling yet. "
+                "Tools will be ignored. Consider using Anthropic or OpenAI providers for tool evaluation."
+            )
+
         async def _make_request() -> ModelResponse:
             async with measure_time() as timer:
                 # Build request payload

@@ -5,6 +5,8 @@ from typing import Any, Dict, List, Optional
 
 from pydantic import BaseModel, Field
 
+from promptlens.models.tools import ToolCall, ToolCallEvaluation
+
 
 class ModelResponse(BaseModel):
     """Response from a model.
@@ -20,6 +22,8 @@ class ModelResponse(BaseModel):
         cost_usd: Estimated cost in USD
         error: Error message if the request failed
         timestamp: When the response was generated
+        tool_calls: Tool calls made by the model (if any)
+        stop_reason: Reason the model stopped generating (e.g., "end_turn", "tool_use")
     """
 
     content: str
@@ -33,6 +37,16 @@ class ModelResponse(BaseModel):
     error: Optional[str] = None
     timestamp: datetime = Field(default_factory=datetime.utcnow)
 
+    # Tool calling fields (optional, for backward compatibility)
+    tool_calls: List[ToolCall] = Field(
+        default_factory=list,
+        description="Tool calls made by the model in this response"
+    )
+    stop_reason: Optional[str] = Field(
+        None,
+        description="Reason the model stopped (e.g., 'end_turn', 'tool_use', 'max_tokens')"
+    )
+
 
 class JudgeScore(BaseModel):
     """Score from LLM judge.
@@ -44,6 +58,9 @@ class JudgeScore(BaseModel):
         judge_model: Model used for judging
         judge_provider: Provider of the judge model
         timestamp: When the score was generated
+        tool_evaluations: Detailed evaluation of each tool call (if applicable)
+        tool_usage_score: Overall score for tool usage correctness (1-5)
+        tool_efficiency_score: Score for tool usage efficiency (1-5)
     """
 
     score: int = Field(..., ge=1, le=5)  # Must be 1-5
@@ -52,6 +69,20 @@ class JudgeScore(BaseModel):
     judge_model: str
     judge_provider: str
     timestamp: datetime = Field(default_factory=datetime.utcnow)
+
+    # Tool evaluation fields (optional, for backward compatibility)
+    tool_evaluations: List[ToolCallEvaluation] = Field(
+        default_factory=list,
+        description="Detailed evaluation results for each tool call"
+    )
+    tool_usage_score: Optional[float] = Field(
+        None,
+        description="Overall score for tool usage correctness (0.0-1.0)"
+    )
+    tool_efficiency_score: Optional[float] = Field(
+        None,
+        description="Score for tool usage efficiency (0.0-1.0)"
+    )
 
 
 class EvaluationResult(BaseModel):

@@ -2,13 +2,20 @@
 
 import logging
 from datetime import datetime
+from typing import List
 
 from promptlens.judges.base import BaseJudge
-from promptlens.judges.parser import parse_judge_response, validate_score
-from promptlens.judges.prompts import format_judge_prompt
+from promptlens.judges.parser import (
+    evaluate_tool_call_accuracy,
+    parse_judge_response,
+    parse_tool_judge_response,
+    validate_score,
+)
+from promptlens.judges.prompts import format_judge_prompt, format_tool_judge_prompt
 from promptlens.models.config import JudgeConfig, ModelConfig, ProviderConfig
 from promptlens.models.result import JudgeScore, ModelResponse
 from promptlens.models.test_case import TestCase
+from promptlens.models.tools import ToolCall, ToolCallEvaluation
 from promptlens.providers.factory import get_provider
 
 logger = logging.getLogger(__name__)
@@ -46,6 +53,29 @@ class LLMJudge(BaseJudge):
         model_response: ModelResponse,
     ) -> JudgeScore:
         """Evaluate a model response using LLM-as-judge.
+
+        Routes to tool evaluation if test case has tool evaluation enabled.
+
+        Args:
+            test_case: The test case with expected behavior
+            model_response: The model's response to evaluate
+
+        Returns:
+            JudgeScore with score (1-5) and explanation
+        """
+        # Check if this is a tool evaluation
+        if test_case.evaluation_mode in ["tool_only", "tool_and_answer"]:
+            return await self._evaluate_with_tools(test_case, model_response)
+
+        # Standard evaluation (no tools)
+        return await self._evaluate_standard(test_case, model_response)
+
+    async def _evaluate_standard(
+        self,
+        test_case: TestCase,
+        model_response: ModelResponse,
+    ) -> JudgeScore:
+        """Standard evaluation without tool calling.
 
         Args:
             test_case: The test case with expected behavior
@@ -96,6 +126,130 @@ class LLMJudge(BaseJudge):
                 judge_model=self.config.model,
                 judge_provider=self.config.provider,
                 timestamp=datetime.utcnow(),
+            )
+
+    async def _evaluate_with_tools(
+        self,
+        test_case: TestCase,
+        model_response: ModelResponse,
+    ) -> JudgeScore:
+        """Evaluate a model response that includes tool calling.
+
+        Performs two-stage evaluation:
+        1. Automatic comparison of expected vs actual tool calls
+        2. LLM judge evaluation with multi-criteria scoring
+
+        Args:
+            test_case: The test case with expected tool calls
+            model_response: The model's response with tool calls
+
+        Returns:
+            JudgeScore with tool evaluation metrics
+        """
+        # Stage 1: Automatic evaluation
+        tool_evaluations: List[ToolCallEvaluation] = []
+
+        for i, expected_call in enumerate(test_case.expected_tool_calls):
+            # Find matching actual call (by index or name)
+            actual_call = None
+            if i < len(model_response.tool_calls):
+                actual_call = model_response.tool_calls[i]
+            elif not expected_call.optional:
+                # Try to find by name if index doesn't match
+                for tc in model_response.tool_calls:
+                    if tc.name == expected_call.name:
+                        actual_call = tc
+                        break
+
+            # Evaluate this tool call
+            evaluation = evaluate_tool_call_accuracy(
+                expected=expected_call,
+                actual=actual_call,
+                index=i,
+            )
+            tool_evaluations.append(evaluation)
+
+        # Calculate automatic metrics
+        total_accuracy = sum(e.parameter_accuracy for e in tool_evaluations)
+        avg_accuracy = total_accuracy / len(tool_evaluations) if tool_evaluations else 0.0
+        all_correct = all(e.correct_tool for e in tool_evaluations)
+
+        # Stage 2: LLM judge evaluation
+        try:
+            # Prepare data for prompt formatting
+            tools_data = [tool.to_anthropic_format() for tool in test_case.tools]
+            expected_calls_data = [
+                {"name": ec.name, "arguments": ec.arguments}
+                for ec in test_case.expected_tool_calls
+            ]
+            actual_calls_data = [
+                {"name": tc.name, "arguments": tc.arguments}
+                for tc in model_response.tool_calls
+            ]
+            auto_eval_data = [
+                {
+                    "expected_tool": e.expected_tool,
+                    "actual_tool": e.actual_tool,
+                    "correct_tool": e.correct_tool,
+                    "parameter_accuracy": e.parameter_accuracy,
+                    "explanation": e.explanation,
+                }
+                for e in tool_evaluations
+            ]
+
+            # Format the tool judge prompt
+            prompt = format_tool_judge_prompt(
+                query=test_case.query,
+                expected_behavior=test_case.expected_behavior,
+                response=model_response.content,
+                tools=tools_data,
+                expected_tool_calls=expected_calls_data,
+                actual_tool_calls=actual_calls_data,
+                automatic_evaluations=auto_eval_data,
+                custom_prompt=self.config.custom_prompt,
+            )
+
+            # Get judge's evaluation
+            judge_response = await self.provider.generate(prompt)
+
+            # Parse multi-criteria scores
+            criteria_scores, explanation = parse_tool_judge_response(judge_response.content)
+
+            # Extract overall score (default to 3 if not found)
+            overall_score = criteria_scores.get("overall_score", 3)
+
+            # Calculate combined tool metrics
+            tool_usage_score = avg_accuracy
+            tool_efficiency_score = criteria_scores.get("tool_efficiency", 3) / 5.0
+
+            return JudgeScore(
+                score=overall_score,
+                explanation=explanation,
+                criteria_scores=criteria_scores,
+                judge_model=self.config.model,
+                judge_provider=self.config.provider,
+                timestamp=datetime.utcnow(),
+                tool_evaluations=tool_evaluations,
+                tool_usage_score=tool_usage_score,
+                tool_efficiency_score=tool_efficiency_score,
+            )
+
+        except Exception as e:
+            logger.error(f"Tool evaluation failed: {e}")
+            # Return score based on automatic evaluation only
+            fallback_score = 5 if all_correct and avg_accuracy > 0.9 else 3
+            return JudgeScore(
+                score=fallback_score,
+                explanation=(
+                    f"Automatic evaluation: {avg_accuracy:.1%} parameter accuracy. "
+                    f"LLM judge evaluation failed: {str(e)}"
+                ),
+                judge_model=self.config.model,
+                judge_provider=self.config.provider,
+                timestamp=datetime.utcnow(),
+                tool_evaluations=tool_evaluations,
+                tool_usage_score=avg_accuracy,
+                tool_efficiency_score=0.6 if all_correct else 0.3,
             )
 
     @property
