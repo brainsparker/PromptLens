@@ -209,7 +209,10 @@ class Runner:
             # Generate response (pass tools if provided)
             model_response = await provider.generate(
                 test_case.query,
-                tools=test_case.tools if test_case.tools else None
+                tools=test_case.tools if test_case.tools else None,
+                retry_attempts=self.config.execution.retry_attempts,
+                retry_delay_seconds=self.config.execution.retry_delay_seconds,
+                timeout_seconds=self.config.execution.timeout_seconds,
             )
 
             # Judge the response (only if generation succeeded)

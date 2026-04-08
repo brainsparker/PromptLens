@@ -1,7 +1,7 @@
 """Base provider interface for LLM providers."""
 
 from abc import ABC, abstractmethod
-from typing import List, Optional
+from typing import List, Optional, Tuple
 
 from promptlens.models.config import ProviderConfig
 from promptlens.models.result import ModelResponse
@@ -91,3 +91,35 @@ class BaseProvider(ABC):
             True if the provider supports tools, False otherwise
         """
         return False  # Default: most providers don't support tools yet
+
+    def get_retry_settings(self, kwargs: dict) -> Tuple[int, float]:
+        """Resolve retry settings from runtime kwargs.
+
+        Args:
+            kwargs: Runtime kwargs passed to ``generate``.
+
+        Returns:
+            Tuple of (max_attempts, initial_delay_seconds)
+        """
+        max_attempts = int(kwargs.get("retry_attempts", 3))
+        initial_delay = float(kwargs.get("retry_delay_seconds", 1.0))
+
+        # Guard rails to prevent invalid runtime values from breaking retries
+        if max_attempts < 1:
+            max_attempts = 1
+        if initial_delay < 0:
+            initial_delay = 0.0
+
+        return max_attempts, initial_delay
+
+    def get_timeout_seconds(self, kwargs: dict) -> int:
+        """Resolve request timeout in seconds from runtime kwargs.
+
+        Args:
+            kwargs: Runtime kwargs passed to ``generate``.
+
+        Returns:
+            Request timeout in seconds.
+        """
+        timeout_seconds = int(kwargs.get("timeout_seconds", self.config.timeout))
+        return timeout_seconds if timeout_seconds > 0 else self.config.timeout
