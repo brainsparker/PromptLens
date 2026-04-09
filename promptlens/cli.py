@@ -7,12 +7,12 @@ from pathlib import Path
 from typing import Optional
 
 import click
-import yaml
 from dotenv import load_dotenv
 from rich.console import Console
 from rich.logging import RichHandler
 
 from promptlens import __version__
+from promptlens.config_loading import apply_run_overrides, load_config_data
 from promptlens.exporters.csv_exporter import CSVExporter
 from promptlens.exporters.html_exporter import HTMLExporter
 from promptlens.exporters.json_exporter import JSONExporter
@@ -90,14 +90,10 @@ def run(
     try:
         # Load config
         console.print(f"\n[cyan]Loading configuration from {config}...[/cyan]")
-        with open(config, "r") as f:
-            config_data = yaml.safe_load(f)
+        config_data = load_config_data(config)
 
         # Override with CLI options
-        if golden_set:
-            config_data["golden_set"] = golden_set
-        if output_dir:
-            config_data["output"]["directory"] = output_dir
+        config_data = apply_run_overrides(config_data, golden_set, output_dir)
 
         # Parse config
         try:
