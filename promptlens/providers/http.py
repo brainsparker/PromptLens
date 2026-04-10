@@ -35,6 +35,61 @@ class HTTPProvider(BaseProvider):
 
         self.endpoint = config.endpoint
 
+    @staticmethod
+    def _extract_content(data: Dict[str, Any]) -> str:
+        """Extract text content from common HTTP provider response shapes.
+
+        Supports Ollama-style, OpenAI-compatible text/chat completions, and
+        chunked content arrays.
+        """
+        if "response" in data and isinstance(data["response"], str):
+            return data["response"]
+
+        if "text" in data and isinstance(data["text"], str):
+            return data["text"]
+
+        if "content" in data:
+            content = data["content"]
+            if isinstance(content, str):
+                return content
+            if isinstance(content, list):
+                parts: List[str] = []
+                for item in content:
+                    if isinstance(item, dict) and isinstance(item.get("text"), str):
+                        parts.append(item["text"])
+                    elif isinstance(item, str):
+                        parts.append(item)
+                if parts:
+                    return "".join(parts)
+
+        choices = data.get("choices")
+        if isinstance(choices, list) and choices:
+            choice = choices[0] if isinstance(choices[0], dict) else {}
+
+            if isinstance(choice.get("text"), str):
+                return choice["text"]
+
+            message = choice.get("message")
+            if isinstance(message, dict):
+                message_content = message.get("content")
+                if isinstance(message_content, str):
+                    return message_content
+                if isinstance(message_content, list):
+                    parts = []
+                    for item in message_content:
+                        if isinstance(item, dict) and isinstance(item.get("text"), str):
+                            parts.append(item["text"])
+                        elif isinstance(item, str):
+                            parts.append(item)
+                    if parts:
+                        return "".join(parts)
+
+            delta = choice.get("delta")
+            if isinstance(delta, dict) and isinstance(delta.get("content"), str):
+                return delta["content"]
+
+        return ""
+
     async def generate(
         self,
         prompt: str,
@@ -84,17 +139,7 @@ class HTTPProvider(BaseProvider):
                         response.raise_for_status()
                         data = await response.json()
 
-                # Extract content (try common response formats)
-                content = ""
-                if "response" in data:
-                    content = data["response"]  # Ollama format
-                elif "text" in data:
-                    content = data["text"]
-                elif "content" in data:
-                    content = data["content"]
-                elif "choices" in data and len(data["choices"]) > 0:
-                    # OpenAI-compatible format
-                    content = data["choices"][0].get("text", "")
+                content = self._extract_content(data)
 
                 # Local models typically don't provide token counts or cost
                 return ModelResponse(
