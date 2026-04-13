@@ -8,7 +8,7 @@ This module defines the data structures needed to:
 """
 
 from typing import Any, Dict, List, Optional
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
 
 
 class ToolParameter(BaseModel):
@@ -24,8 +24,7 @@ class ToolParameter(BaseModel):
     properties: Optional[Dict[str, "ToolParameter"]] = Field(None, description="For object types, nested properties")
     items: Optional["ToolParameter"] = Field(None, description="For array types, the item schema")
 
-    class Config:
-        extra = "allow"  # Allow additional JSON Schema fields
+    model_config = ConfigDict(extra="allow")  # Allow additional JSON Schema fields
 
 
 class ToolDefinition(BaseModel):

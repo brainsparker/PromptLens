@@ -2,7 +2,7 @@
 
 from typing import Any, Dict, List, Optional
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
 
 from promptlens.models.tools import ToolDefinition, ExpectedToolCall
 
@@ -50,9 +50,8 @@ class TestCase(BaseModel):
         description="Whether to actually execute tools (default: False, evaluation only)"
     )
 
-    class Config:
-        """Pydantic config."""
-        json_schema_extra = {
+    model_config = ConfigDict(
+        json_schema_extra={
             "example": {
                 "id": "cs-001",
                 "query": "How do I reset my password?",
@@ -61,6 +60,7 @@ class TestCase(BaseModel):
                 "tags": ["password", "account"],
             }
         }
+    )
 
 
 class GoldenSet(BaseModel):
@@ -80,9 +80,8 @@ class GoldenSet(BaseModel):
     test_cases: List[TestCase]
     metadata: Dict[str, Any] = Field(default_factory=dict)
 
-    class Config:
-        """Pydantic config."""
-        json_schema_extra = {
+    model_config = ConfigDict(
+        json_schema_extra={
             "example": {
                 "name": "Customer Support Tests",
                 "description": "Test cases for customer support chatbot",
@@ -98,3 +97,4 @@ class GoldenSet(BaseModel):
                 ],
             }
         }
+    )

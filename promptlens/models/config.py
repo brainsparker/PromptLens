@@ -2,7 +2,7 @@
 
 from typing import Any, Dict, List, Optional
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
 
 
 class ProviderConfig(BaseModel):
@@ -114,9 +114,8 @@ class RunConfig(BaseModel):
     execution: ExecutionConfig = Field(default_factory=ExecutionConfig)
     output: OutputConfig = Field(default_factory=OutputConfig)
 
-    class Config:
-        """Pydantic config."""
-        json_schema_extra = {
+    model_config = ConfigDict(
+        json_schema_extra={
             "example": {
                 "golden_set": "./examples/golden_sets/customer_support.yaml",
                 "models": [
@@ -143,3 +142,4 @@ class RunConfig(BaseModel):
                 },
             }
         }
+    )
