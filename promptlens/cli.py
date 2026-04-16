@@ -26,6 +26,46 @@ load_dotenv()
 console = Console()
 
 
+def _load_config_data(config_path: str) -> dict:
+    """Load and validate raw YAML config data."""
+    with open(config_path, "r") as f:
+        config_data = yaml.safe_load(f)
+
+    if config_data is None:
+        raise click.ClickException("Configuration file is empty")
+
+    if not isinstance(config_data, dict):
+        raise click.ClickException(
+            "Configuration root must be a mapping/object"
+        )
+
+    return config_data
+
+
+def _apply_cli_overrides(
+    config_data: dict,
+    golden_set: Optional[str],
+    output_dir: Optional[str],
+) -> dict:
+    """Apply CLI override flags to config data safely."""
+    if golden_set:
+        config_data["golden_set"] = golden_set
+
+    if output_dir:
+        output_config = config_data.get("output")
+        if output_config is None:
+            output_config = {}
+            config_data["output"] = output_config
+        elif not isinstance(output_config, dict):
+            raise click.ClickException(
+                "Invalid configuration: 'output' must be an object"
+            )
+
+        output_config["directory"] = output_dir
+
+    return config_data
+
+
 def setup_logging(level: str = "INFO") -> None:
     """Set up logging configuration.
 
@@ -90,14 +130,10 @@ def run(
     try:
         # Load config
         console.print(f"\n[cyan]Loading configuration from {config}...[/cyan]")
-        with open(config, "r") as f:
-            config_data = yaml.safe_load(f)
+        config_data = _load_config_data(config)
 
         # Override with CLI options
-        if golden_set:
-            config_data["golden_set"] = golden_set
-        if output_dir:
-            config_data["output"]["directory"] = output_dir
+        config_data = _apply_cli_overrides(config_data, golden_set, output_dir)
 
         # Parse config
         try:
