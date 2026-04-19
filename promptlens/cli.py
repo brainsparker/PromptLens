@@ -2,6 +2,7 @@
 
 import asyncio
 import logging
+import shutil
 import sys
 from pathlib import Path
 from typing import Optional
@@ -24,6 +25,14 @@ from promptlens.runners.runner import Runner
 load_dotenv()
 
 console = Console()
+
+
+def _remove_path_if_exists(path: Path) -> None:
+    """Remove a file/symlink/directory path if it exists."""
+    if path.is_symlink() or path.is_file():
+        path.unlink(missing_ok=True)
+    elif path.exists():
+        shutil.rmtree(path)
 
 
 def setup_logging(level: str = "INFO") -> None:
@@ -97,6 +106,7 @@ def run(
         if golden_set:
             config_data["golden_set"] = golden_set
         if output_dir:
+            config_data.setdefault("output", {})
             config_data["output"]["directory"] = output_dir
 
         # Parse config
@@ -144,8 +154,7 @@ def run(
 
         # Create symlink to latest
         latest_link = output_dir_path / "latest"
-        if latest_link.exists():
-            latest_link.unlink()
+        _remove_path_if_exists(latest_link)
         try:
             latest_link.symlink_to(result.run_id)
         except OSError:
