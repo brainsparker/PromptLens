@@ -22,6 +22,43 @@ class HTTPProvider(BaseProvider):
     Supports Ollama, LM Studio, and any other HTTP-based inference server.
     """
 
+    @staticmethod
+    def _extract_content(data: Dict[str, Any]) -> str:
+        """Extract text content from common HTTP/LLM response formats."""
+        # Ollama-like format
+        if isinstance(data.get("response"), str):
+            return data["response"]
+
+        # Generic text/content top-level fields
+        if isinstance(data.get("text"), str):
+            return data["text"]
+        if isinstance(data.get("content"), str):
+            return data["content"]
+
+        # OpenAI-style choices
+        choices = data.get("choices")
+        if isinstance(choices, list) and choices:
+            first = choices[0]
+            if isinstance(first, dict):
+                if isinstance(first.get("text"), str):
+                    return first["text"]
+
+                message = first.get("message")
+                if isinstance(message, dict):
+                    message_content = message.get("content")
+                    if isinstance(message_content, str):
+                        return message_content
+                    if isinstance(message_content, list):
+                        parts = [
+                            part.get("text", "")
+                            for part in message_content
+                            if isinstance(part, dict) and isinstance(part.get("text"), str)
+                        ]
+                        if parts:
+                            return "".join(parts)
+
+        return ""
+
     def __init__(self, config: ProviderConfig) -> None:
         """Initialize the HTTP provider.
 
@@ -85,16 +122,7 @@ class HTTPProvider(BaseProvider):
                         data = await response.json()
 
                 # Extract content (try common response formats)
-                content = ""
-                if "response" in data:
-                    content = data["response"]  # Ollama format
-                elif "text" in data:
-                    content = data["text"]
-                elif "content" in data:
-                    content = data["content"]
-                elif "choices" in data and len(data["choices"]) > 0:
-                    # OpenAI-compatible format
-                    content = data["choices"][0].get("text", "")
+                content = self._extract_content(data)
 
                 # Local models typically don't provide token counts or cost
                 return ModelResponse(
