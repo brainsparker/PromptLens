@@ -36,6 +36,11 @@ class JSONLoader(BaseLoader):
         except json.JSONDecodeError as e:
             raise ValueError(f"Invalid JSON in {path}: {e}")
 
+        if not isinstance(data, dict):
+            raise ValueError(
+                f"Invalid golden set format in {path}: root value must be a JSON object"
+            )
+
         try:
             golden_set = GoldenSet(**data)
             logger.info(
