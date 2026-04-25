@@ -248,10 +248,9 @@ models:
   - name: "Local Llama"
     provider: http
     model: llama3.1:8b
+    endpoint: "http://localhost:11434/api/generate"
     temperature: 0.7
     max_tokens: 1024
-    additional_params:
-      endpoint: "http://localhost:11434/api/generate"
 ```
 
 **Setup:**
@@ -270,10 +269,12 @@ models:
   - name: "Display Name"           # Human-readable name
     provider: anthropic             # anthropic, openai, google, http
     model: model-identifier         # Model ID
+    endpoint: "http://..."          # Optional, for HTTP provider
     temperature: 0.7                # 0.0-1.0
     max_tokens: 1024                # Maximum output tokens
     additional_params:              # Provider-specific params
-      endpoint: "http://..."        # For HTTP provider
+      # endpoint under additional_params is still accepted for backwards compatibility
+      custom_option: "value"
 ```
 
 ### Judge
