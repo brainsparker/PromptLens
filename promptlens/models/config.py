@@ -36,6 +36,8 @@ class ModelConfig(BaseModel):
         name: Display name for the model
         provider: Provider name
         model: Model identifier
+        endpoint: Optional endpoint URL (for HTTP/local providers)
+        timeout: Optional request timeout in seconds
         temperature: Sampling temperature
         max_tokens: Maximum tokens to generate
         additional_params: Provider-specific parameters
@@ -44,6 +46,8 @@ class ModelConfig(BaseModel):
     name: str
     provider: str
     model: str
+    endpoint: Optional[str] = None
+    timeout: Optional[int] = None
     temperature: float = 0.7
     max_tokens: int = 1024
     additional_params: Dict[str, Any] = Field(default_factory=dict)
