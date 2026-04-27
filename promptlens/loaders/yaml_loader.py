@@ -39,6 +39,11 @@ class YAMLLoader(BaseLoader):
         if data is None:
             raise ValueError(f"Empty YAML file: {path}")
 
+        if not isinstance(data, dict):
+            raise ValueError(
+                f"Invalid golden set format in {path}: expected a YAML mapping at top level"
+            )
+
         try:
             golden_set = GoldenSet(**data)
             logger.info(
