@@ -102,6 +102,13 @@ def run(
         with open(config, "r") as f:
             config_data = yaml.safe_load(f)
 
+        if config_data is None:
+            console.print("[red]Invalid configuration: configuration file is empty[/red]")
+            sys.exit(1)
+        if not isinstance(config_data, dict):
+            console.print("[red]Invalid configuration: top-level YAML must be a mapping/object[/red]")
+            sys.exit(1)
+
         # Override with CLI options
         if golden_set:
             config_data["golden_set"] = golden_set
