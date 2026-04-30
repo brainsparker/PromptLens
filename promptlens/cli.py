@@ -6,6 +6,7 @@ import shutil
 import sys
 from pathlib import Path
 from typing import Optional
+from collections.abc import Mapping
 
 import click
 import yaml
@@ -33,6 +34,19 @@ def _remove_path_if_exists(path: Path) -> None:
         path.unlink(missing_ok=True)
     elif path.exists():
         shutil.rmtree(path)
+
+
+def _load_config_data(config_path: str) -> dict:
+    """Load YAML config and enforce a top-level mapping object."""
+    with open(config_path, "r") as f:
+        config_data = yaml.safe_load(f)
+
+    if not isinstance(config_data, Mapping):
+        raise ValueError(
+            "Configuration file must contain a top-level mapping/object"
+        )
+
+    return dict(config_data)
 
 
 def setup_logging(level: str = "INFO") -> None:
@@ -99,8 +113,7 @@ def run(
     try:
         # Load config
         console.print(f"\n[cyan]Loading configuration from {config}...[/cyan]")
-        with open(config, "r") as f:
-            config_data = yaml.safe_load(f)
+        config_data = _load_config_data(config)
 
         # Override with CLI options
         if golden_set:
