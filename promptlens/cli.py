@@ -27,6 +27,17 @@ load_dotenv()
 console = Console()
 
 
+def _normalize_config_data(config_data: object, config_path: str) -> dict:
+    """Validate and normalize loaded YAML config payload."""
+    if config_data is None:
+        raise ValueError(f"Configuration file is empty: {config_path}")
+    if not isinstance(config_data, dict):
+        raise ValueError(
+            f"Invalid configuration format in {config_path}: expected a YAML mapping at top level"
+        )
+    return config_data
+
+
 def _remove_path_if_exists(path: Path) -> None:
     """Remove a file/symlink/directory path if it exists."""
     if path.is_symlink() or path.is_file():
@@ -100,7 +111,7 @@ def run(
         # Load config
         console.print(f"\n[cyan]Loading configuration from {config}...[/cyan]")
         with open(config, "r") as f:
-            config_data = yaml.safe_load(f)
+            config_data = _normalize_config_data(yaml.safe_load(f), config)
 
         # Override with CLI options
         if golden_set:
