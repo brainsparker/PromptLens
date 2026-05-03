@@ -19,6 +19,7 @@ PromptLens runs golden test sets against multiple models, scores outputs using L
 - **Multiple Export Formats** - HTML, JSON, CSV, and Markdown outputs
 - **Parallel Execution** - Async execution with configurable concurrency and retry logic
 - **Portable & Local** - No cloud backend, all data stays on your machine
+- **Safer HTTP Integrations** - Unparseable HTTP provider responses fail fast with clear error context
 - **Easy to Extend** - Plugin architecture for custom providers, judges, and exporters
 
 ---

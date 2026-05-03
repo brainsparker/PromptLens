@@ -123,6 +123,11 @@ class HTTPProvider(BaseProvider):
 
                 # Extract content (try common response formats)
                 content = self._extract_content(data)
+                if not content.strip():
+                    raise ValueError(
+                        "HTTP provider response did not contain parseable text content. "
+                        f"Top-level keys: {sorted(data.keys()) if isinstance(data, dict) else type(data).__name__}"
+                    )
 
                 # Local models typically don't provide token counts or cost
                 return ModelResponse(
