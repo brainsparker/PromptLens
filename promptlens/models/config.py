@@ -2,7 +2,7 @@
 
 from typing import Any, Dict, List, Optional
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 
 
 class ProviderConfig(BaseModel):
@@ -83,6 +83,9 @@ class ExecutionConfig(BaseModel):
     timeout_seconds: int = 60
 
 
+SUPPORTED_OUTPUT_FORMATS = {"html", "json", "csv", "md"}
+
+
 class OutputConfig(BaseModel):
     """Configuration for output settings.
 
@@ -95,6 +98,26 @@ class OutputConfig(BaseModel):
     directory: str = "./promptlens_results"
     formats: List[str] = Field(default_factory=lambda: ["html", "json"])
     run_name: Optional[str] = None
+
+    @field_validator("formats")
+    @classmethod
+    def validate_formats(cls, formats: List[str]) -> List[str]:
+        """Ensure output formats are supported and normalized."""
+        normalized_formats = [format_name.lower().strip() for format_name in formats]
+        invalid_formats = [
+            format_name for format_name in normalized_formats
+            if format_name not in SUPPORTED_OUTPUT_FORMATS
+        ]
+
+        if invalid_formats:
+            supported = ", ".join(sorted(SUPPORTED_OUTPUT_FORMATS))
+            invalid = ", ".join(sorted(set(invalid_formats)))
+            raise ValueError(
+                f"Unsupported output formats: {invalid}. "
+                f"Supported formats: {supported}"
+            )
+
+        return normalized_formats
 
 
 class RunConfig(BaseModel):
