@@ -33,6 +33,18 @@ async def retry_with_exponential_backoff(
     Raises:
         Exception: The last exception if all retries fail
     """
+    if max_attempts < 1:
+        raise ValueError("max_attempts must be >= 1")
+
+    if initial_delay < 0:
+        raise ValueError("initial_delay must be >= 0")
+
+    if backoff_factor <= 0:
+        raise ValueError("backoff_factor must be > 0")
+
+    if max_delay <= 0:
+        raise ValueError("max_delay must be > 0")
+
     delay = initial_delay
     last_exception = None
 
