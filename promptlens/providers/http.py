@@ -5,6 +5,7 @@ from datetime import datetime
 from typing import Any, Dict, List, Optional
 
 import aiohttp
+from aiohttp import ContentTypeError
 
 from promptlens.models.config import ProviderConfig
 from promptlens.models.result import ModelResponse
@@ -58,6 +59,11 @@ class HTTPProvider(BaseProvider):
                             return "".join(parts)
 
         return ""
+
+    @staticmethod
+    def _extract_content_from_text_response(text: str) -> str:
+        """Extract usable content from plain-text HTTP responses."""
+        return text.strip()
 
     def __init__(self, config: ProviderConfig) -> None:
         """Initialize the HTTP provider.
@@ -119,10 +125,14 @@ class HTTPProvider(BaseProvider):
                         timeout=aiohttp.ClientTimeout(total=self.config.timeout),
                     ) as response:
                         response.raise_for_status()
-                        data = await response.json()
+                        try:
+                            data = await response.json()
+                            content = self._extract_content(data)
+                        except ContentTypeError:
+                            text = await response.text()
+                            content = self._extract_content_from_text_response(text)
 
-                # Extract content (try common response formats)
-                content = self._extract_content(data)
+                # Extracted content from JSON shape or plain text body.
 
                 # Local models typically don't provide token counts or cost
                 return ModelResponse(
