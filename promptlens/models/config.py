@@ -22,9 +22,9 @@ class ProviderConfig(BaseModel):
     name: str
     model: str
     api_key: Optional[str] = None
-    temperature: float = 0.7
-    max_tokens: int = 1024
-    timeout: int = 60
+    temperature: float = Field(default=0.7, ge=0.0, le=2.0)
+    max_tokens: int = Field(default=1024, gt=0)
+    timeout: int = Field(default=60, gt=0)
     endpoint: Optional[str] = None
     additional_params: Dict[str, Any] = Field(default_factory=dict)
 
@@ -44,8 +44,8 @@ class ModelConfig(BaseModel):
     name: str
     provider: str
     model: str
-    temperature: float = 0.7
-    max_tokens: int = 1024
+    temperature: float = Field(default=0.7, ge=0.0, le=2.0)
+    max_tokens: int = Field(default=1024, gt=0)
     additional_params: Dict[str, Any] = Field(default_factory=dict)
 
 
@@ -62,7 +62,7 @@ class JudgeConfig(BaseModel):
 
     provider: str = "anthropic"
     model: str = "claude-3-5-sonnet-20241022"
-    temperature: float = 0.3
+    temperature: float = Field(default=0.3, ge=0.0, le=2.0)
     custom_prompt: Optional[str] = None
     criteria: List[str] = Field(default_factory=lambda: ["accuracy", "helpfulness"])
 
@@ -77,10 +77,10 @@ class ExecutionConfig(BaseModel):
         timeout_seconds: Request timeout
     """
 
-    parallel_requests: int = 3
-    retry_attempts: int = 3
-    retry_delay_seconds: float = 1.0
-    timeout_seconds: int = 60
+    parallel_requests: int = Field(default=3, gt=0)
+    retry_attempts: int = Field(default=3, ge=0)
+    retry_delay_seconds: float = Field(default=1.0, ge=0.0)
+    timeout_seconds: int = Field(default=60, gt=0)
 
 
 class OutputConfig(BaseModel):
