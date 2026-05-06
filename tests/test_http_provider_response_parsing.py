@@ -57,3 +57,9 @@ def test_extract_content_returns_empty_for_unknown_shape() -> None:
     provider = _provider()
 
     assert provider._extract_content({"foo": "bar"}) == ""
+
+
+def test_extract_content_from_text_response_strips_whitespace() -> None:
+    provider = _provider()
+
+    assert provider._extract_content_from_text_response("  hello world\n") == "hello world"
