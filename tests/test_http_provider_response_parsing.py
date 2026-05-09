@@ -53,6 +53,30 @@ def test_extract_content_from_openai_chat_content_parts() -> None:
     assert provider._extract_content(data) == "Part 1 Part 2"
 
 
+def test_extract_content_from_openai_responses_api_output_text() -> None:
+    provider = _provider()
+    data = {"output_text": "Hello from Responses API"}
+
+    assert provider._extract_content(data) == "Hello from Responses API"
+
+
+def test_extract_content_from_openai_responses_api_output_array() -> None:
+    provider = _provider()
+    data = {
+        "output": [
+            {
+                "type": "message",
+                "content": [
+                    {"type": "output_text", "text": "Hello "},
+                    {"type": "output_text", "text": "world"},
+                ],
+            }
+        ]
+    }
+
+    assert provider._extract_content(data) == "Hello world"
+
+
 def test_extract_content_returns_empty_for_unknown_shape() -> None:
     provider = _provider()
 
