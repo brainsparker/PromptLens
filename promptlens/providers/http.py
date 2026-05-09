@@ -29,11 +29,34 @@ class HTTPProvider(BaseProvider):
         if isinstance(data.get("response"), str):
             return data["response"]
 
+        # OpenAI Responses API top-level text
+        if isinstance(data.get("output_text"), str):
+            return data["output_text"]
+
         # Generic text/content top-level fields
         if isinstance(data.get("text"), str):
             return data["text"]
         if isinstance(data.get("content"), str):
             return data["content"]
+
+        # OpenAI Responses API output array
+        output = data.get("output")
+        if isinstance(output, list) and output:
+            parts: List[str] = []
+            for item in output:
+                if not isinstance(item, dict):
+                    continue
+                content_items = item.get("content")
+                if not isinstance(content_items, list):
+                    continue
+                for content_item in content_items:
+                    if not isinstance(content_item, dict):
+                        continue
+                    text = content_item.get("text")
+                    if isinstance(text, str):
+                        parts.append(text)
+            if parts:
+                return "".join(parts)
 
         # OpenAI-style choices
         choices = data.get("choices")
