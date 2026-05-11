@@ -85,12 +85,14 @@ class YouProvider(BaseProvider):
                 if "max_tokens" not in payload:
                     payload["max_tokens"] = kwargs.get("max_tokens", self.config.max_tokens)
 
+                timeout_seconds = self.get_timeout_seconds(kwargs)
+
                 async with aiohttp.ClientSession() as session:
                     async with session.post(
                         self.base_url,
                         headers=headers,
                         json=payload,
-                        timeout=aiohttp.ClientTimeout(total=self.config.timeout),
+                        timeout=aiohttp.ClientTimeout(total=timeout_seconds),
                     ) as response:
                         response.raise_for_status()
                         data = await response.json()
@@ -126,11 +128,13 @@ class YouProvider(BaseProvider):
                     timestamp=datetime.utcnow(),
                 )
 
+        max_attempts, initial_delay = self.get_retry_settings(kwargs)
+
         try:
             return await retry_with_exponential_backoff(
                 func=_make_request,
-                max_attempts=3,
-                initial_delay=1.0,
+                max_attempts=max_attempts,
+                initial_delay=initial_delay,
             )
         except Exception as e:
             logger.error(f"You.com request failed: {e}")
