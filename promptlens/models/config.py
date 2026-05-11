@@ -2,7 +2,7 @@
 
 from typing import Any, Dict, List, Optional
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 
 
 class ProviderConfig(BaseModel):
@@ -113,6 +113,28 @@ class RunConfig(BaseModel):
     judge: JudgeConfig = Field(default_factory=JudgeConfig)
     execution: ExecutionConfig = Field(default_factory=ExecutionConfig)
     output: OutputConfig = Field(default_factory=OutputConfig)
+
+    @field_validator("models")
+    @classmethod
+    def validate_models_unique(cls, models: List[ModelConfig]) -> List[ModelConfig]:
+        """Ensure model display names are unique to avoid ambiguous reports."""
+        seen = set()
+        duplicates = set()
+
+        for model in models:
+            normalized = model.name.strip().lower()
+            if normalized in seen:
+                duplicates.add(model.name)
+            else:
+                seen.add(normalized)
+
+        if duplicates:
+            duplicate_list = ", ".join(sorted(duplicates))
+            raise ValueError(
+                f"Model names must be unique (case-insensitive). Duplicates: {duplicate_list}"
+            )
+
+        return models
 
     class Config:
         """Pydantic config."""
