@@ -2,7 +2,7 @@
 
 from typing import Any, Dict, List, Optional
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 
 
 class ProviderConfig(BaseModel):
@@ -48,6 +48,27 @@ class ModelConfig(BaseModel):
     max_tokens: int = 1024
     additional_params: Dict[str, Any] = Field(default_factory=dict)
 
+    @field_validator("provider", "model", "name")
+    @classmethod
+    def _non_empty_strings(cls, value: str) -> str:
+        if not value or not value.strip():
+            raise ValueError("must be a non-empty string")
+        return value
+
+    @field_validator("temperature")
+    @classmethod
+    def _validate_temperature(cls, value: float) -> float:
+        if value < 0.0 or value > 2.0:
+            raise ValueError("temperature must be between 0.0 and 2.0")
+        return value
+
+    @field_validator("max_tokens")
+    @classmethod
+    def _validate_max_tokens(cls, value: int) -> int:
+        if value < 1:
+            raise ValueError("max_tokens must be >= 1")
+        return value
+
 
 class JudgeConfig(BaseModel):
     """Configuration for the judge.
@@ -65,6 +86,30 @@ class JudgeConfig(BaseModel):
     temperature: float = 0.3
     custom_prompt: Optional[str] = None
     criteria: List[str] = Field(default_factory=lambda: ["accuracy", "helpfulness"])
+
+    @field_validator("provider", "model")
+    @classmethod
+    def _validate_non_empty(cls, value: str) -> str:
+        if not value or not value.strip():
+            raise ValueError("must be a non-empty string")
+        return value
+
+    @field_validator("temperature")
+    @classmethod
+    def _validate_temperature(cls, value: float) -> float:
+        if value < 0.0 or value > 2.0:
+            raise ValueError("temperature must be between 0.0 and 2.0")
+        return value
+
+    @field_validator("criteria")
+    @classmethod
+    def _validate_criteria(cls, value: List[str]) -> List[str]:
+        if not value:
+            raise ValueError("criteria must contain at least one item")
+        normalized = [c.strip() for c in value if isinstance(c, str) and c.strip()]
+        if not normalized:
+            raise ValueError("criteria must contain non-empty strings")
+        return normalized
 
 
 class ExecutionConfig(BaseModel):
