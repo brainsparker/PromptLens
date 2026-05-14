@@ -32,10 +32,17 @@ def get_provider(model_config: ModelConfig) -> BaseProvider:
     Raises:
         ValueError: If provider is not supported
     """
-    provider_name = model_config.provider.lower()
+    provider_name = model_config.provider.strip().lower()
+
+    if not provider_name:
+        available = ", ".join(sorted(PROVIDER_REGISTRY.keys()))
+        raise ValueError(
+            "Provider name cannot be empty. "
+            f"Available providers: {available}"
+        )
 
     if provider_name not in PROVIDER_REGISTRY:
-        available = ", ".join(PROVIDER_REGISTRY.keys())
+        available = ", ".join(sorted(PROVIDER_REGISTRY.keys()))
         raise ValueError(
             f"Provider '{provider_name}' not supported. "
             f"Available providers: {available}"
