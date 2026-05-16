@@ -1,8 +1,9 @@
 """Configuration data models."""
 
 from typing import Any, Dict, List, Optional
+from urllib.parse import urlparse
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 
 
 class ProviderConfig(BaseModel):
@@ -27,6 +28,20 @@ class ProviderConfig(BaseModel):
     timeout: int = 60
     endpoint: Optional[str] = None
     additional_params: Dict[str, Any] = Field(default_factory=dict)
+
+    @field_validator("endpoint")
+    @classmethod
+    def validate_endpoint(cls, value: Optional[str]) -> Optional[str]:
+        """Validate endpoint URL when provided."""
+        if value is None:
+            return value
+
+        parsed = urlparse(value)
+        if parsed.scheme not in {"http", "https"}:
+            raise ValueError("endpoint must use http or https scheme")
+        if not parsed.netloc:
+            raise ValueError("endpoint must include a host")
+        return value
 
 
 class ModelConfig(BaseModel):
