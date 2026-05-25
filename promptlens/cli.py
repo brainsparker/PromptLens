@@ -99,8 +99,18 @@ def run(
     try:
         # Load config
         console.print(f"\n[cyan]Loading configuration from {config}...[/cyan]")
-        with open(config, "r") as f:
+        with open(config, "r", encoding="utf-8") as f:
             config_data = yaml.safe_load(f)
+
+        if config_data is None:
+            console.print(f"[red]Invalid configuration: empty YAML file: {config}[/red]")
+            sys.exit(1)
+
+        if not isinstance(config_data, dict):
+            console.print(
+                "[red]Invalid configuration: expected a YAML mapping at top level[/red]"
+            )
+            sys.exit(1)
 
         # Override with CLI options
         if golden_set:
