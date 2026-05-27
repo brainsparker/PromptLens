@@ -1,5 +1,6 @@
 """Generic HTTP provider for local models (Ollama, LM Studio, etc.)."""
 
+import json
 import logging
 from datetime import datetime
 from typing import Any, Dict, List, Optional
@@ -119,7 +120,19 @@ class HTTPProvider(BaseProvider):
                         timeout=aiohttp.ClientTimeout(total=self.config.timeout),
                     ) as response:
                         response.raise_for_status()
-                        data = await response.json()
+                        raw_text = await response.text()
+
+                try:
+                    data = json.loads(raw_text)
+                except json.JSONDecodeError as exc:
+                    logger.error(
+                        "HTTP provider returned non-JSON response from %s: %s",
+                        self.endpoint,
+                        raw_text[:500],
+                    )
+                    raise ValueError(
+                        "HTTP provider expected JSON response but received non-JSON content"
+                    ) from exc
 
                 # Extract content (try common response formats)
                 content = self._extract_content(data)
