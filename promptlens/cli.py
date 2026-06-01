@@ -21,6 +21,21 @@ from promptlens.exporters.markdown_exporter import MarkdownExporter
 from promptlens.models.config import RunConfig
 from promptlens.runners.runner import Runner
 
+
+def _load_config_data(config_path: str) -> dict:
+    """Load and validate top-level config structure from YAML."""
+    with open(config_path, "r") as f:
+        config_data = yaml.safe_load(f)
+
+    if config_data is None:
+        raise ValueError("Configuration file is empty")
+    if not isinstance(config_data, dict):
+        raise ValueError(
+            f"Configuration must be a YAML object at top level, got {type(config_data).__name__}"
+        )
+
+    return config_data
+
 # Load environment variables
 load_dotenv()
 
@@ -99,8 +114,7 @@ def run(
     try:
         # Load config
         console.print(f"\n[cyan]Loading configuration from {config}...[/cyan]")
-        with open(config, "r") as f:
-            config_data = yaml.safe_load(f)
+        config_data = _load_config_data(config)
 
         # Override with CLI options
         if golden_set:
