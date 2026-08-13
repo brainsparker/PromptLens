@@ -5,8 +5,8 @@ description = "Lightweight LLM evaluation tool for prompts, agents, and workflow
 authors = ["sparker <sparker@example.com>"]
 readme = "README.md"
 license = "MIT"
-homepage = "https://github.com/sparker/promptlens"
-repository = "https://github.com/sparker/promptlens"
+homepage = "https://github.com/brainsparker/PromptLens"
+repository = "https://github.com/brainsparker/PromptLens"
 keywords = ["llm", "evaluation", "testing", "ai", "prompts", "agents"]
 classifiers = [
     "Development Status :: 3 - Alpha",
