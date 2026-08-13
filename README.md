@@ -7,6 +7,10 @@ PromptLens runs golden test sets against multiple models, scores outputs using L
 ![License](https://img.shields.io/badge/license-MIT-blue.svg)
 ![Python](https://img.shields.io/badge/python-3.9+-blue.svg)
 
+![PromptLens HTML report: summary cards, model comparison with score distributions, and per-test-case results with judge explanations](assets/report-screenshot.png)
+
+*The HTML report from a two-model run: summary cards, side-by-side model comparison with score distributions, and per-test-case responses with judge scores and explanations.*
+
 ---
 
 ## Features
@@ -25,13 +29,7 @@ PromptLens runs golden test sets against multiple models, scores outputs using L
 
 ## Installation
 
-### Using pip (PyPI - Coming Soon)
-
-```bash
-pip install promptlens
-```
-
-### From Source
+Install from source:
 
 ```bash
 git clone https://github.com/brainsparker/PromptLens.git
@@ -42,10 +40,14 @@ pip install -e .
 poetry install
 ```
 
+A PyPI release is planned. Until then, installing from source is the supported path.
+
 ### Requirements
 
-- Python 3.9+
-- API keys for the providers you want to use (Anthropic, OpenAI, Google, You.com)
+- Python 3.9+ (3.10+ recommended)
+- An API key for at least one provider you want to evaluate (Anthropic, OpenAI, Google, You.com), or a local model via Ollama or LM Studio with no key at all
+
+You can explore the CLI before setting any keys: `promptlens validate examples/golden_sets/customer_support.yaml` checks a golden set entirely offline.
 
 ---
 
