@@ -114,11 +114,13 @@ class GoogleProvider(BaseProvider):
                     timestamp=datetime.utcnow(),
                 )
 
+        max_attempts, initial_delay = self.get_retry_settings(kwargs)
+
         try:
             return await retry_with_exponential_backoff(
                 func=_make_request,
-                max_attempts=3,
-                initial_delay=1.0,
+                max_attempts=max_attempts,
+                initial_delay=initial_delay,
             )
         except Exception as e:
             logger.error(f"Google request failed: {e}")
