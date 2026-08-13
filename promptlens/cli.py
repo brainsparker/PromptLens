@@ -17,8 +17,10 @@ from promptlens import __version__
 from promptlens.exporters.csv_exporter import CSVExporter
 from promptlens.exporters.html_exporter import HTMLExporter
 from promptlens.exporters.json_exporter import JSONExporter
+from promptlens.exporters.junit_exporter import JUnitXMLExporter
 from promptlens.exporters.markdown_exporter import MarkdownExporter
 from promptlens.models.config import RunConfig
+from promptlens.models.result import RunResult
 from promptlens.runners.runner import Runner
 
 
@@ -48,6 +50,27 @@ def _remove_path_if_exists(path: Path) -> None:
         path.unlink(missing_ok=True)
     elif path.exists():
         shutil.rmtree(path)
+
+
+def _check_fail_under(result: "RunResult", fail_under: float) -> list:
+    """Return models whose average judge score falls below the gate.
+
+    A model with no judge scores at all also fails the gate, since the gate
+    cannot be evaluated without scores and a silent pass would be misleading.
+
+    Args:
+        result: The completed run result
+        fail_under: Minimum acceptable average judge score (1-5 scale)
+
+    Returns:
+        List of (model, average_score_or_None) tuples that fail the gate
+    """
+    failing = []
+    for model in result.models_tested:
+        avg = result.get_average_score(model)
+        if avg is None or avg < fail_under:
+            failing.append((model, avg))
+    return failing
 
 
 def setup_logging(level: str = "INFO") -> None:
@@ -96,11 +119,22 @@ def cli(log_level: str) -> None:
     is_flag=True,
     help="Validate config without running evaluation",
 )
+@click.option(
+    "--fail-under",
+    type=click.FloatRange(1.0, 5.0),
+    default=None,
+    help=(
+        "Quality gate for CI: exit with code 2 if any model's average judge "
+        "score falls below this value (1-5 scale). Also sets the per-test "
+        "failure threshold used by the junit export format."
+    ),
+)
 def run(
     config: str,
     golden_set: Optional[str],
     output_dir: Optional[str],
     dry_run: bool,
+    fail_under: Optional[float],
 ) -> None:
     """Run evaluation with the given configuration file.
 
@@ -110,6 +144,7 @@ def run(
         promptlens run config.yaml
         promptlens run config.yaml --output-dir ./results
         promptlens run config.yaml --dry-run
+        promptlens run config.yaml --fail-under 3.5
     """
     try:
         # Load config
@@ -155,6 +190,7 @@ def run(
             "csv": (CSVExporter(), "results.csv"),
             "md": (MarkdownExporter(), "results.md"),
             "html": (HTMLExporter(), "report.html"),
+            "junit": (JUnitXMLExporter(fail_under=fail_under), "junit.xml"),
         }
 
         exported_files = []
@@ -181,6 +217,21 @@ def run(
         if "html" in run_config.output.formats:
             html_path = run_output_dir / "report.html"
             console.print(f"\n[cyan]View report: file://{html_path.absolute()}[/cyan]")
+
+        # Quality gate for CI
+        if fail_under is not None:
+            failing_models = _check_fail_under(result, fail_under)
+            if failing_models:
+                console.print(
+                    f"\n[bold red]✗ Quality gate failed (--fail-under {fail_under:g}):[/bold red]"
+                )
+                for model, avg in failing_models:
+                    avg_display = f"{avg:.2f}" if avg is not None else "no scores"
+                    console.print(f"  {model}: average judge score {avg_display}")
+                sys.exit(2)
+            console.print(
+                f"\n[bold green]✓ Quality gate passed (--fail-under {fail_under:g})[/bold green]"
+            )
 
     except Exception as e:
         console.print(f"\n[bold red]Error:[/bold red] {e}")
@@ -282,7 +333,7 @@ def list_runs(output_dir: str) -> None:
 @click.option(
     "--format",
     "export_format",
-    type=click.Choice(["json", "csv", "md", "html"], case_sensitive=False),
+    type=click.Choice(["json", "csv", "md", "html", "junit"], case_sensitive=False),
     required=True,
     help="Export format",
 )
@@ -327,7 +378,13 @@ def export(run_id: str, export_format: str, output: Optional[str], output_dir: s
 
         # Determine output path
         if not output:
-            extensions = {"json": ".json", "csv": ".csv", "md": ".md", "html": ".html"}
+            extensions = {
+                "json": ".json",
+                "csv": ".csv",
+                "md": ".md",
+                "html": ".html",
+                "junit": ".xml",
+            }
             output = f"export_{run_id}{extensions[export_format]}"
 
         # Export
@@ -336,6 +393,7 @@ def export(run_id: str, export_format: str, output: Optional[str], output_dir: s
             "csv": CSVExporter(),
             "md": MarkdownExporter(),
             "html": HTMLExporter(),
+            "junit": JUnitXMLExporter(),
         }
 
         exporter = exporters[export_format]
