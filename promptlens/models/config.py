@@ -1,8 +1,9 @@
 """Configuration data models."""
 
 from typing import Any, Dict, List, Optional
+from urllib.parse import urlparse
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 
 class ProviderConfig(BaseModel):
@@ -28,6 +29,20 @@ class ProviderConfig(BaseModel):
     endpoint: Optional[str] = None
     additional_params: Dict[str, Any] = Field(default_factory=dict)
 
+    @field_validator("endpoint")
+    @classmethod
+    def validate_endpoint(cls, value: Optional[str]) -> Optional[str]:
+        """Validate endpoint URL when provided."""
+        if value is None:
+            return value
+
+        parsed = urlparse(value)
+        if parsed.scheme not in {"http", "https"}:
+            raise ValueError("endpoint must use http or https scheme")
+        if not parsed.netloc:
+            raise ValueError("endpoint must include a host")
+        return value
+
 
 class ModelConfig(BaseModel):
     """Configuration for a model to test.
@@ -36,6 +51,8 @@ class ModelConfig(BaseModel):
         name: Display name for the model
         provider: Provider name
         model: Model identifier
+        endpoint: Optional endpoint URL (for HTTP/local providers)
+        timeout: Optional request timeout in seconds
         temperature: Sampling temperature
         max_tokens: Maximum tokens to generate
         additional_params: Provider-specific parameters
@@ -44,9 +61,25 @@ class ModelConfig(BaseModel):
     name: str
     provider: str
     model: str
+    endpoint: Optional[str] = None
+    timeout: Optional[int] = None
     temperature: float = 0.7
     max_tokens: int = 1024
     additional_params: Dict[str, Any] = Field(default_factory=dict)
+
+    @field_validator("temperature")
+    @classmethod
+    def validate_temperature(cls, value: float) -> float:
+        if not 0.0 <= value <= 2.0:
+            raise ValueError("temperature must be between 0.0 and 2.0")
+        return value
+
+    @field_validator("max_tokens")
+    @classmethod
+    def validate_max_tokens(cls, value: int) -> int:
+        if value <= 0:
+            raise ValueError("max_tokens must be greater than 0")
+        return value
 
 
 class JudgeConfig(BaseModel):
@@ -82,6 +115,34 @@ class ExecutionConfig(BaseModel):
     retry_delay_seconds: float = 1.0
     timeout_seconds: int = 60
 
+    @field_validator("parallel_requests")
+    @classmethod
+    def validate_parallel_requests(cls, value: int) -> int:
+        if value <= 0:
+            raise ValueError("parallel_requests must be greater than 0")
+        return value
+
+    @field_validator("retry_attempts")
+    @classmethod
+    def validate_retry_attempts(cls, value: int) -> int:
+        if value < 0:
+            raise ValueError("retry_attempts must be greater than or equal to 0")
+        return value
+
+    @field_validator("retry_delay_seconds")
+    @classmethod
+    def validate_retry_delay_seconds(cls, value: float) -> float:
+        if value < 0:
+            raise ValueError("retry_delay_seconds must be greater than or equal to 0")
+        return value
+
+    @field_validator("timeout_seconds")
+    @classmethod
+    def validate_timeout_seconds(cls, value: int) -> int:
+        if value <= 0:
+            raise ValueError("timeout_seconds must be greater than 0")
+        return value
+
 
 class OutputConfig(BaseModel):
     """Configuration for output settings.
@@ -95,6 +156,18 @@ class OutputConfig(BaseModel):
     directory: str = "./promptlens_results"
     formats: List[str] = Field(default_factory=lambda: ["html", "json"])
     run_name: Optional[str] = None
+
+    @field_validator("formats")
+    @classmethod
+    def validate_formats(cls, value: List[str]) -> List[str]:
+        allowed = {"html", "json", "csv", "md"}
+        normalized = [fmt.lower() for fmt in value]
+        invalid = sorted({fmt for fmt in normalized if fmt not in allowed})
+        if invalid:
+            raise ValueError(f"unsupported output format(s): {', '.join(invalid)}")
+        if not normalized:
+            raise ValueError("output formats must contain at least one format")
+        return normalized
 
 
 class RunConfig(BaseModel):
@@ -114,9 +187,35 @@ class RunConfig(BaseModel):
     execution: ExecutionConfig = Field(default_factory=ExecutionConfig)
     output: OutputConfig = Field(default_factory=OutputConfig)
 
-    class Config:
-        """Pydantic config."""
-        json_schema_extra = {
+    @model_validator(mode="after")
+    def validate_models(self) -> "RunConfig":
+        if not self.models:
+            raise ValueError("models must contain at least one model configuration")
+        return self
+
+    @field_validator("models")
+    @classmethod
+    def validate_models_unique(cls, models: List[ModelConfig]) -> List[ModelConfig]:
+        """Ensure model display names are unique to avoid ambiguous reports."""
+        seen = set()
+        duplicates = set()
+
+        for model in models:
+            normalized = model.name.strip().lower()
+            if normalized in seen:
+                duplicates.add(model.name)
+            else:
+                seen.add(normalized)
+
+        if duplicates:
+            duplicate_list = ", ".join(sorted(duplicates))
+            raise ValueError(
+                f"Model names must be unique (case-insensitive). Duplicates: {duplicate_list}"
+            )
+
+        return models
+
+    model_config = ConfigDict(json_schema_extra={
             "example": {
                 "golden_set": "./examples/golden_sets/customer_support.yaml",
                 "models": [
@@ -142,4 +241,4 @@ class RunConfig(BaseModel):
                     "formats": ["html", "json"],
                 },
             }
-        }
+        })

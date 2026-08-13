@@ -32,22 +32,39 @@ def get_provider(model_config: ModelConfig) -> BaseProvider:
     Raises:
         ValueError: If provider is not supported
     """
-    provider_name = model_config.provider.lower()
+    provider_name = model_config.provider.strip().lower()
+
+    if not provider_name:
+        available = ", ".join(sorted(PROVIDER_REGISTRY.keys()))
+        raise ValueError(
+            "Provider name cannot be empty. "
+            f"Available providers: {available}"
+        )
 
     if provider_name not in PROVIDER_REGISTRY:
-        available = ", ".join(PROVIDER_REGISTRY.keys())
+        available = ", ".join(sorted(PROVIDER_REGISTRY.keys()))
         raise ValueError(
             f"Provider '{provider_name}' not supported. "
             f"Available providers: {available}"
         )
 
+    # Copy params so we can normalize legacy keys without mutating input
+    additional_params = dict(model_config.additional_params)
+
+    # Backwards compatibility: allow endpoint under additional_params for HTTP provider
+    endpoint = model_config.endpoint
+    if provider_name == "http" and endpoint is None:
+        endpoint = additional_params.pop("endpoint", None)
+
     # Convert ModelConfig to ProviderConfig
     provider_config = ProviderConfig(
         name=provider_name,
         model=model_config.model,
+        endpoint=endpoint,
+        timeout=model_config.timeout or 60,
         temperature=model_config.temperature,
         max_tokens=model_config.max_tokens,
-        additional_params=model_config.additional_params,
+        additional_params=additional_params,
     )
 
     # Get provider class and instantiate

@@ -1,5 +1,6 @@
 """Generic HTTP provider for local models (Ollama, LM Studio, etc.)."""
 
+import json
 import logging
 from datetime import datetime
 from typing import Any, Dict, List, Optional
@@ -57,6 +58,19 @@ class HTTPProvider(BaseProvider):
                         if parts:
                             return "".join(parts)
 
+        return ""
+
+    @staticmethod
+    def _extract_error_message(data: Dict[str, Any]) -> str:
+        """Extract an error message from common HTTP error response shapes."""
+        for key in ("error", "message", "detail"):
+            value = data.get(key)
+            if isinstance(value, str) and value.strip():
+                return value.strip()
+            if isinstance(value, dict):
+                nested_message = value.get("message")
+                if isinstance(nested_message, str) and nested_message.strip():
+                    return nested_message.strip()
         return ""
 
     def __init__(self, config: ProviderConfig) -> None:
@@ -119,10 +133,33 @@ class HTTPProvider(BaseProvider):
                         timeout=aiohttp.ClientTimeout(total=self.config.timeout),
                     ) as response:
                         response.raise_for_status()
-                        data = await response.json()
+                        raw_text = await response.text()
+
+                try:
+                    data = json.loads(raw_text)
+                except json.JSONDecodeError as exc:
+                    logger.error(
+                        "HTTP provider returned non-JSON response from %s: %s",
+                        self.endpoint,
+                        raw_text[:500],
+                    )
+                    raise ValueError(
+                        "HTTP provider expected JSON response but received non-JSON content"
+                    ) from exc
 
                 # Extract content (try common response formats)
                 content = self._extract_content(data)
+
+                if not content.strip():
+                    response_error = self._extract_error_message(data)
+                    if response_error:
+                        raise ValueError(f"HTTP endpoint returned error payload: {response_error}")
+
+                    top_level_keys = sorted(list(data.keys()))
+                    raise ValueError(
+                        "HTTP endpoint response did not contain supported content fields "
+                        f"(keys: {top_level_keys})"
+                    )
 
                 # Local models typically don't provide token counts or cost
                 return ModelResponse(
