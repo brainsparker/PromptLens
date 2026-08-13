@@ -19,8 +19,8 @@ PromptLens helps you **objectively compare and improve LLM outputs** by:
 
 ```bash
 # Clone the repository
-git clone https://github.com/sparker/promptlens.git
-cd promptlens
+git clone https://github.com/brainsparker/PromptLens.git
+cd PromptLens
 
 # Install
 python3 -m pip install -e .
@@ -681,8 +681,8 @@ A: Yes! See the CI/CD workflow example above.
 
 ## Get Help
 
-- **Issues**: https://github.com/sparker/promptlens/issues
-- **Discussions**: https://github.com/sparker/promptlens/discussions
+- **Issues**: https://github.com/brainsparker/PromptLens/issues
+- **Discussions**: https://github.com/brainsparker/PromptLens/discussions
 - **Examples**: See `examples/` directory in the repo
 
 ---

@@ -34,8 +34,8 @@ pip install promptlens
 ### From Source
 
 ```bash
-git clone https://github.com/sparker/promptlens.git
-cd promptlens
+git clone https://github.com/brainsparker/PromptLens.git
+cd PromptLens
 pip install -e .
 
 # Or with Poetry
@@ -599,8 +599,8 @@ MIT License - see [LICENSE](LICENSE) for details.
 
 ## Support
 
-- **Issues**: https://github.com/sparker/promptlens/issues
-- **Discussions**: https://github.com/sparker/promptlens/discussions
+- **Issues**: https://github.com/brainsparker/PromptLens/issues
+- **Discussions**: https://github.com/brainsparker/PromptLens/discussions
 - **Email**: sparker@example.com
 
 ---
