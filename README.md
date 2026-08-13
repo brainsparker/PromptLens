@@ -16,7 +16,8 @@ PromptLens runs golden test sets against multiple models, scores outputs using L
 - **LLM-as-Judge Scoring** - Automated evaluation using another LLM with configurable criteria
 - **Cost & Latency Tracking** - Monitor per-query costs and response times across models
 - **Beautiful Reports** - Interactive HTML reports with charts, comparisons, and detailed results
-- **Multiple Export Formats** - HTML, JSON, CSV, and Markdown outputs
+- **Multiple Export Formats** - HTML, JSON, CSV, Markdown, and JUnit XML outputs
+- **CI-Native Quality Gates** - JUnit XML reports plus a `--fail-under` score gate that fails the build on quality regressions
 - **Parallel Execution** - Async execution with configurable concurrency and retry logic
 - **Portable & Local** - No cloud backend, all data stays on your machine
 - **Easy to Extend** - Plugin architecture for custom providers, judges, and exporters
@@ -308,8 +309,40 @@ output:
     - json                          # Raw JSON data
     - csv                           # Flattened spreadsheet
     - md                            # Markdown summary
+    - junit                         # JUnit XML for CI test reporting
   run_name: "My Evaluation"         # Display name
 ```
+
+---
+
+## CI/CD Integration
+
+PromptLens speaks the language your CI system already understands: JUnit XML test reports and exit codes.
+
+Add `junit` to your output formats, then gate the build on judge scores:
+
+```bash
+promptlens run config.yaml --fail-under 3.5
+```
+
+- Each golden-set test case becomes a JUnit test case (one test suite per model).
+- A test case scoring below the threshold is reported as a failure, a model API error as an error, and an unjudged case as skipped.
+- If any model's average judge score falls below `--fail-under`, the command exits with code 2, failing the pipeline. Exit code 1 is reserved for run errors, so CI can tell quality regressions apart from infrastructure failures.
+
+Example GitHub Actions step:
+
+```yaml
+- name: Run prompt evals
+  run: promptlens run config.yaml --fail-under 3.5
+
+- name: Publish eval report
+  uses: mikepenz/action-junit-report@v5
+  if: always()
+  with:
+    report_paths: "promptlens_results/*/junit.xml"
+```
+
+The same `junit.xml` works with GitLab (`artifacts:reports:junit`), Jenkins, CircleCI, and any other JUnit-compatible report viewer.
 
 ---
 
@@ -557,6 +590,7 @@ class RuleBasedJudge(BaseJudge):
 - [x] LLM-as-judge scoring
 - [x] HTML reports with charts
 - [x] JSON/CSV/Markdown export
+- [x] JUnit XML export and `--fail-under` CI quality gate
 - [x] Parallel execution with retry logic
 - [ ] Multi-judge consensus scoring
 - [ ] Synthetic test case generation
