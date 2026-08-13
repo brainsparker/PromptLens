@@ -1,3 +1,5 @@
+import pytest
+
 from promptlens.models.config import ProviderConfig
 from promptlens.providers.http import HTTPProvider
 
@@ -57,3 +59,39 @@ def test_extract_content_returns_empty_for_unknown_shape() -> None:
     provider = _provider()
 
     assert provider._extract_content({"foo": "bar"}) == ""
+
+
+@pytest.mark.asyncio
+async def test_http_provider_returns_clear_error_for_non_json_response() -> None:
+    provider = _provider()
+
+    class MockResponse:
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, exc_type, exc, tb):
+            return False
+
+        def raise_for_status(self) -> None:
+            return None
+
+        async def text(self) -> str:
+            return "not-json"
+
+    class MockSession:
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, exc_type, exc, tb):
+            return False
+
+        def post(self, *args, **kwargs):
+            return MockResponse()
+
+    from unittest.mock import patch
+
+    with patch("promptlens.providers.http.aiohttp.ClientSession", return_value=MockSession()):
+        result = await provider.generate("hello")
+
+    assert result.error is not None
+    assert "expected JSON response" in result.error
