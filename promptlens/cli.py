@@ -406,5 +406,224 @@ def export(run_id: str, export_format: str, output: Optional[str], output_dir: s
         sys.exit(1)
 
 
+def _resolve_run_results(ref: str, output_dir: str) -> Path:
+    """Resolve a run reference to a results.json path.
+
+    Accepts, in order of precedence:
+      1. A direct path to a results JSON file
+      2. A path to a run directory containing results.json
+      3. A run ID (or "latest") inside output_dir
+
+    Args:
+        ref: Run reference from the command line
+        output_dir: Results directory used for run ID lookups
+
+    Returns:
+        Path to a results.json file
+
+    Raises:
+        FileNotFoundError: If the reference cannot be resolved
+    """
+    direct = Path(ref)
+    if direct.is_file():
+        return direct
+    if direct.is_dir() and (direct / "results.json").is_file():
+        return direct / "results.json"
+
+    candidate = Path(output_dir) / ref / "results.json"
+    if candidate.is_file():
+        return candidate
+
+    raise FileNotFoundError(
+        f"Could not resolve run '{ref}'. Pass a results.json path, a run "
+        f"directory, or a run ID that exists in {output_dir}."
+    )
+
+
+def _load_run_result(ref: str, output_dir: str) -> RunResult:
+    """Load a RunResult from a run reference."""
+    import json
+
+    results_path = _resolve_run_results(ref, output_dir)
+    with open(results_path) as f:
+        data = json.load(f)
+    return RunResult(**data)
+
+
+@cli.command()
+@click.argument("baseline")
+@click.argument("current")
+@click.option(
+    "--output-dir",
+    type=click.Path(),
+    default="./promptlens_results",
+    help="Results directory used to resolve run IDs",
+)
+@click.option(
+    "--model",
+    default=None,
+    help="Restrict the comparison to a single model",
+)
+@click.option(
+    "--max-regression",
+    type=click.FloatRange(0.0, 4.0),
+    default=None,
+    help=(
+        "CI gate: exit with code 2 if any model's average judge score drops "
+        "by more than this amount versus the baseline. 0 fails on any drop."
+    ),
+)
+@click.option(
+    "--max-case-regression",
+    type=click.FloatRange(0.0, 4.0),
+    default=None,
+    help=(
+        "CI gate: exit with code 2 if any single test case's judge score "
+        "drops by more than this amount versus the baseline. 0 fails on any drop."
+    ),
+)
+@click.option(
+    "--markdown",
+    "markdown_path",
+    type=click.Path(),
+    default=None,
+    help="Write a markdown diff report to this path (useful as a PR comment)",
+)
+@click.option(
+    "--json",
+    "json_path",
+    type=click.Path(),
+    default=None,
+    help="Write the full comparison as JSON to this path",
+)
+def compare(
+    baseline: str,
+    current: str,
+    output_dir: str,
+    model: Optional[str],
+    max_regression: Optional[float],
+    max_case_regression: Optional[float],
+    markdown_path: Optional[str],
+    json_path: Optional[str],
+) -> None:
+    """Compare a run against a baseline and flag regressions.
+
+    BASELINE and CURRENT each accept a run ID (including "latest"), a run
+    directory, or a direct path to a results.json file.
+
+    Examples:
+        promptlens compare main-run-id latest
+        promptlens compare baseline/results.json pr/results.json
+        promptlens compare main latest --max-regression 0 --markdown diff.md
+    """
+    try:
+        from rich.table import Table
+
+        from promptlens.comparison import CaseStatus, compare_runs, render_markdown
+
+        baseline_result = _load_run_result(baseline, output_dir)
+        current_result = _load_run_result(current, output_dir)
+
+        comparison = compare_runs(baseline_result, current_result, model=model)
+
+        if comparison.golden_set_mismatch:
+            console.print(
+                "[yellow]Warning: runs used different golden sets "
+                f"('{baseline_result.golden_set_name}' vs "
+                f"'{current_result.golden_set_name}'). Deltas may not be "
+                "meaningful.[/yellow]\n"
+            )
+
+        table = Table(title=f"Baseline {comparison.baseline_run_id} vs Current {comparison.current_run_id}")
+        table.add_column("Model")
+        table.add_column("Baseline Avg", justify="right")
+        table.add_column("Current Avg", justify="right")
+        table.add_column("Delta", justify="right")
+        table.add_column("Regressed", justify="right")
+        table.add_column("Improved", justify="right")
+        table.add_column("Unchanged", justify="right")
+
+        for mc in comparison.model_comparisons:
+            delta_display = "n/a"
+            delta_style = ""
+            if mc.average_delta is not None:
+                delta_display = f"{mc.average_delta:+.2f}"
+                if mc.average_delta < 0:
+                    delta_style = "red"
+                elif mc.average_delta > 0:
+                    delta_style = "green"
+            table.add_row(
+                mc.model,
+                f"{mc.baseline_average:.2f}" if mc.baseline_average is not None else "n/a",
+                f"{mc.current_average:.2f}" if mc.current_average is not None else "n/a",
+                f"[{delta_style}]{delta_display}[/{delta_style}]" if delta_style else delta_display,
+                str(mc.regressed),
+                str(mc.improved),
+                str(mc.unchanged),
+            )
+
+        console.print(table)
+
+        regressions = comparison.regressions
+        if regressions:
+            console.print(f"\n[bold red]Regressed cases ({len(regressions)}):[/bold red]")
+            for c in regressions:
+                console.print(
+                    f"  {c.test_case_id} ({c.model}): "
+                    f"{c.baseline_score}/5 -> {c.current_score}/5 ({c.delta:+d})"
+                )
+
+        added = [c for c in comparison.case_comparisons if c.status == CaseStatus.ADDED]
+        removed = [c for c in comparison.case_comparisons if c.status == CaseStatus.REMOVED]
+        if added:
+            console.print(f"\n[cyan]Added cases: {len(added)}[/cyan]")
+        if removed:
+            console.print(f"[yellow]Removed cases: {len(removed)}[/yellow]")
+
+        if markdown_path:
+            md_path = Path(markdown_path)
+            md_path.parent.mkdir(parents=True, exist_ok=True)
+            md_path.write_text(render_markdown(comparison), encoding="utf-8")
+            console.print(f"\n[green]✓[/green] Markdown report: {markdown_path}")
+
+        if json_path:
+            jp = Path(json_path)
+            jp.parent.mkdir(parents=True, exist_ok=True)
+            jp.write_text(comparison.model_dump_json(indent=2), encoding="utf-8")
+            console.print(f"[green]✓[/green] JSON report: {json_path}")
+
+        failures = comparison.check_gates(
+            max_regression=max_regression,
+            max_case_regression=max_case_regression,
+        )
+        if failures:
+            console.print("\n[bold red]✗ Regression gate failed:[/bold red]")
+            for failure in failures:
+                if failure.kind == "average":
+                    console.print(
+                        f"  {failure.model}: average score dropped {failure.drop:g} "
+                        f"(allowed {failure.allowed:g})"
+                    )
+                else:
+                    console.print(
+                        f"  {failure.model} / {failure.test_case_id}: score dropped "
+                        f"{failure.drop:g} (allowed {failure.allowed:g})"
+                    )
+            sys.exit(2)
+
+        if max_regression is not None or max_case_regression is not None:
+            console.print("\n[bold green]✓ Regression gate passed[/bold green]")
+
+    except FileNotFoundError as e:
+        console.print(f"[red]{e}[/red]")
+        sys.exit(1)
+    except SystemExit:
+        raise
+    except Exception as e:
+        console.print(f"[red]Comparison failed: {e}[/red]")
+        logging.exception("Comparison failed")
+        sys.exit(1)
+
+
 if __name__ == "__main__":
     cli()

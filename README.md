@@ -18,6 +18,7 @@ PromptLens runs golden test sets against multiple models, scores outputs using L
 - **Beautiful Reports** - Interactive HTML reports with charts, comparisons, and detailed results
 - **Multiple Export Formats** - HTML, JSON, CSV, Markdown, and JUnit XML outputs
 - **CI-Native Quality Gates** - JUnit XML reports plus a `--fail-under` score gate that fails the build on quality regressions
+- **Baseline Regression Comparison** - `promptlens compare` diffs two runs case by case, flags regressions, and gates CI on score drops relative to a baseline
 - **Parallel Execution** - Async execution with configurable concurrency and retry logic
 - **Portable & Local** - No cloud backend, all data stays on your machine
 - **Easy to Extend** - Plugin architecture for custom providers, judges, and exporters
@@ -167,6 +168,9 @@ promptlens list-runs
 
 # Export a run to different format
 promptlens export <run_id> --format html
+
+# Compare a run against a baseline and flag regressions
+promptlens compare <baseline_run_id> latest
 
 # Get help
 promptlens --help
@@ -344,6 +348,60 @@ Example GitHub Actions step:
 ```
 
 The same `junit.xml` works with GitLab (`artifacts:reports:junit`), Jenkins, CircleCI, and any other JUnit-compatible report viewer.
+
+### Baseline regression comparison
+
+`--fail-under` catches absolute quality problems. `promptlens compare` catches relative ones: a prompt change that drops a model from 4.6 to 4.1 still passes a 3.5 gate, but it made things worse. Compare the pull request's run against a baseline run from your main branch:
+
+```bash
+# By run ID (or "latest"), resolved inside --output-dir
+promptlens compare <baseline_run_id> latest
+
+# By path, handy when the baseline is a CI artifact from main
+promptlens compare baseline/results.json promptlens_results/latest
+
+# Gate the build: exit code 2 if any model's average drops at all,
+# or if any single test case drops by more than 1 point
+promptlens compare main-baseline latest --max-regression 0 --max-case-regression 1
+
+# Write a markdown diff, sized for a PR comment
+promptlens compare main-baseline latest --markdown diff.md --json diff.json
+```
+
+What it does:
+
+- Pairs results by test case and model, then classifies each pair as regressed, improved, unchanged, added, removed, or unscored. Added and removed cases are reported, so a shrinking golden set cannot hide a regression.
+- Prints a per-model summary table with average score deltas, plus every regressed case with its score change.
+- `--max-regression` fails the build when a model's average judge score drops by more than the given amount versus the baseline (0 means any drop fails). `--max-case-regression` does the same for individual test cases.
+- Warns when the two runs used different golden sets.
+- `--model` restricts the comparison to one model.
+
+Example GitHub Actions flow, using a baseline artifact produced on main:
+
+```yaml
+- name: Run prompt evals
+  run: promptlens run config.yaml
+
+- name: Download baseline from main
+  uses: dawidd6/action-download-artifact@v6
+  with:
+    branch: main
+    name: promptlens-baseline
+    path: baseline
+
+- name: Compare against baseline
+  run: |
+    promptlens compare baseline/results.json promptlens_results/latest \
+      --max-regression 0 --markdown diff.md
+
+- name: Comment diff on PR
+  if: always()
+  uses: marocchino/sticky-pull-request-comment@v2
+  with:
+    path: diff.md
+```
+
+Exit codes match `run`: 0 for pass, 2 for a failed gate, 1 for errors, so CI can tell quality regressions apart from infrastructure failures.
 
 ---
 
@@ -595,7 +653,7 @@ class RuleBasedJudge(BaseJudge):
 - [x] Parallel execution with retry logic
 - [ ] Multi-judge consensus scoring
 - [ ] Synthetic test case generation
-- [ ] Cross-run comparison and tracking
+- [x] Cross-run comparison with regression gates (`promptlens compare`)
 - [ ] GitHub Action for CI/CD
 - [ ] Web UI for report exploration
 - [ ] Embedding-based similarity scoring
