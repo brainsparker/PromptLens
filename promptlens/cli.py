@@ -406,5 +406,176 @@ def export(run_id: str, export_format: str, output: Optional[str], output_dir: s
         sys.exit(1)
 
 
+@cli.command()
+@click.argument("baseline", type=click.Path(exists=True))
+@click.argument("current", type=click.Path(exists=True))
+@click.option(
+    "--threshold",
+    type=click.FloatRange(0.0, 4.0),
+    default=None,
+    help=(
+        "Minimum per-case judge score drop (1-5 scale) that counts as a "
+        "regression. Defaults to 0.5, so any full-point drop is flagged."
+    ),
+)
+@click.option(
+    "--fail-on-regression",
+    is_flag=True,
+    help=(
+        "Regression gate for CI: exit with code 3 if any test case scored "
+        "lower than the baseline by at least the threshold, or newly errored."
+    ),
+)
+@click.option(
+    "--markdown",
+    "markdown_path",
+    type=click.Path(),
+    help="Write a markdown comparison report to this path (great for PR comments)",
+)
+@click.option(
+    "--json",
+    "json_path",
+    type=click.Path(),
+    help="Write the full comparison data as JSON to this path",
+)
+def compare(
+    baseline: str,
+    current: str,
+    threshold: Optional[float],
+    fail_on_regression: bool,
+    markdown_path: Optional[str],
+    json_path: Optional[str],
+) -> None:
+    """Compare two runs and detect regressions.
+
+    BASELINE and CURRENT are results.json files produced by the json
+    export format. Cases are paired by (test_case_id, model); cases
+    present in only one run are reported but never fail the gate.
+
+    Examples:
+        promptlens compare promptlens_results/run_a/results.json promptlens_results/latest/results.json
+        promptlens compare baseline.json current.json --fail-on-regression
+        promptlens compare baseline.json current.json --markdown diff.md --threshold 1
+    """
+    from rich.table import Table
+
+    from promptlens.comparison import (
+        DEFAULT_REGRESSION_THRESHOLD,
+        compare_runs,
+        load_run_result,
+        render_markdown,
+    )
+
+    try:
+        baseline_result = load_run_result(baseline)
+        current_result = load_run_result(current)
+
+        effective_threshold = (
+            threshold if threshold is not None else DEFAULT_REGRESSION_THRESHOLD
+        )
+        comparison = compare_runs(
+            baseline_result, current_result, threshold=effective_threshold
+        )
+
+        console.print(
+            f"\n[cyan]Comparing[/cyan] {comparison.baseline_run_id} "
+            f"[cyan]->[/cyan] {comparison.current_run_id} "
+            f"(threshold {effective_threshold:g})\n"
+        )
+
+        table = Table(title="Model Summary")
+        table.add_column("Model")
+        table.add_column("Baseline Avg", justify="right")
+        table.add_column("Current Avg", justify="right")
+        table.add_column("Delta", justify="right")
+        table.add_column("Regressed", justify="right")
+        table.add_column("Improved", justify="right")
+        table.add_column("New Errors", justify="right")
+
+        for s in comparison.model_summaries:
+            baseline_avg = (
+                f"{s.baseline_avg_score:.2f}"
+                if s.baseline_avg_score is not None
+                else "n/a"
+            )
+            current_avg = (
+                f"{s.current_avg_score:.2f}"
+                if s.current_avg_score is not None
+                else "n/a"
+            )
+            delta = (
+                f"{s.avg_score_delta:+.2f}"
+                if s.avg_score_delta is not None
+                else "n/a"
+            )
+            delta_style = ""
+            if s.avg_score_delta is not None:
+                delta_style = "red" if s.avg_score_delta < 0 else "green"
+            table.add_row(
+                s.model,
+                baseline_avg,
+                current_avg,
+                f"[{delta_style}]{delta}[/{delta_style}]" if delta_style else delta,
+                str(s.regressed),
+                str(s.improved),
+                str(s.new_errors),
+            )
+        console.print(table)
+
+        flagged = [
+            c for c in comparison.cases if c.status in ("regressed", "new_error")
+        ]
+        if flagged:
+            console.print(f"\n[bold red]Regressions ({len(flagged)}):[/bold red]")
+            for c in flagged:
+                if c.status == "new_error":
+                    detail = f"new error: {c.current_error}"
+                else:
+                    detail = (
+                        f"score {c.baseline_score} -> {c.current_score} "
+                        f"({c.score_delta:+.0f})"
+                    )
+                console.print(f"  [red]✗[/red] {c.test_case_id} ({c.model}): {detail}")
+
+        if comparison.only_in_baseline:
+            console.print(
+                f"\n[yellow]Removed cases (baseline only): "
+                f"{len(comparison.only_in_baseline)}[/yellow]"
+            )
+        if comparison.only_in_current:
+            console.print(
+                f"[yellow]Added cases (current only): "
+                f"{len(comparison.only_in_current)}[/yellow]"
+            )
+
+        if markdown_path:
+            md_file = Path(markdown_path)
+            md_file.parent.mkdir(parents=True, exist_ok=True)
+            md_file.write_text(render_markdown(comparison), encoding="utf-8")
+            console.print(f"\n[green]✓[/green] Markdown report: {markdown_path}")
+
+        if json_path:
+            json_file = Path(json_path)
+            json_file.parent.mkdir(parents=True, exist_ok=True)
+            json_file.write_text(
+                comparison.model_dump_json(indent=2), encoding="utf-8"
+            )
+            console.print(f"[green]✓[/green] JSON report: {json_path}")
+
+        if comparison.has_regressions:
+            console.print(
+                f"\n[bold red]✗ {comparison.total_regressions} regression(s) "
+                f"vs baseline[/bold red]"
+            )
+            if fail_on_regression:
+                sys.exit(3)
+        else:
+            console.print("\n[bold green]✓ No regressions vs baseline[/bold green]")
+
+    except (FileNotFoundError, ValueError) as e:
+        console.print(f"[red]Comparison failed: {e}[/red]")
+        sys.exit(1)
+
+
 if __name__ == "__main__":
     cli()
