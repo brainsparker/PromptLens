@@ -18,6 +18,7 @@ PromptLens runs golden test sets against multiple models, scores outputs using L
 - **Beautiful Reports** - Interactive HTML reports with charts, comparisons, and detailed results
 - **Multiple Export Formats** - HTML, JSON, CSV, Markdown, and JUnit XML outputs
 - **CI-Native Quality Gates** - JUnit XML reports plus a `--fail-under` score gate that fails the build on quality regressions
+- **Run-to-Run Regression Detection** - `promptlens compare` diffs any two runs against a baseline: per-case score deltas, new errors, cost and latency drift, plus a `--fail-on-regression` CI gate and markdown reports for PR comments
 - **Parallel Execution** - Async execution with configurable concurrency and retry logic
 - **Portable & Local** - No cloud backend, all data stays on your machine
 - **Easy to Extend** - Plugin architecture for custom providers, judges, and exporters
@@ -168,9 +169,30 @@ promptlens list-runs
 # Export a run to different format
 promptlens export <run_id> --format html
 
+# Compare two runs and detect regressions
+promptlens compare <baseline_results.json> <current_results.json>
+
 # Get help
 promptlens --help
 ```
+
+### Comparing Runs (Regression Detection)
+
+Every run already writes a `results.json`. Point `compare` at any two of them to see exactly what changed:
+
+```bash
+promptlens compare promptlens_results/run_20260101/results.json \
+                   promptlens_results/latest/results.json
+```
+
+Cases are paired by test case ID and model. You get a per-model summary (average score delta, regressed and improved counts, new errors, cost and latency drift) and a list of every regressed case. Added or removed test cases are reported separately and never counted as regressions, so growing your golden set does not break the gate.
+
+Options:
+
+- `--threshold <points>`: minimum per-case score drop (1-5 scale) that counts as a regression. Default 0.5, so any full-point drop is flagged.
+- `--fail-on-regression`: exit with code 3 when any case regressed or newly errored. Use this in CI.
+- `--markdown <path>`: write a markdown diff report, ready to post as a PR comment.
+- `--json <path>`: write the full comparison data as JSON for downstream tooling.
 
 ---
 
@@ -344,6 +366,24 @@ Example GitHub Actions step:
 ```
 
 The same `junit.xml` works with GitLab (`artifacts:reports:junit`), Jenkins, CircleCI, and any other JUnit-compatible report viewer.
+
+### Baseline Comparison in CI
+
+`--fail-under` is an absolute gate. To also catch relative regressions (the new prompt scores worse than the one on main, even if both clear the bar), keep a baseline `results.json` from your main branch and compare against it:
+
+```yaml
+- name: Run prompt evals
+  run: promptlens run config.yaml --fail-under 3.5
+
+- name: Compare against main baseline
+  run: |
+    promptlens compare baselines/main/results.json \
+                       promptlens_results/latest/results.json \
+                       --fail-on-regression \
+                       --markdown regression-report.md
+```
+
+Exit code 3 means at least one test case regressed past the threshold or newly errored, so CI can distinguish relative regressions (3) from absolute gate failures (2) and run errors (1). The markdown report is ready to post as a PR comment with any comment action.
 
 ---
 
