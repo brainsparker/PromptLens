@@ -18,6 +18,7 @@ PromptLens runs golden test sets against multiple models, scores outputs using L
 - **Beautiful Reports** - Interactive HTML reports with charts, comparisons, and detailed results
 - **Multiple Export Formats** - HTML, JSON, CSV, Markdown, and JUnit XML outputs
 - **CI-Native Quality Gates** - JUnit XML reports plus a `--fail-under` score gate that fails the build on quality regressions
+- **Cross-Run Comparison** - Diff any two runs by test case and model with score, cost, and latency deltas, plus a `--fail-on-regression` CI gate
 - **Parallel Execution** - Async execution with configurable concurrency and retry logic
 - **Portable & Local** - No cloud backend, all data stays on your machine
 - **Easy to Extend** - Plugin architecture for custom providers, judges, and exporters
@@ -164,6 +165,9 @@ promptlens validate <golden_set.yaml>
 
 # List past runs
 promptlens list-runs
+
+# Compare two runs and detect regressions
+promptlens compare <baseline_run_id> <candidate_run_id>
 
 # Export a run to different format
 promptlens export <run_id> --format html
@@ -347,6 +351,63 @@ The same `junit.xml` works with GitLab (`artifacts:reports:junit`), Jenkins, Cir
 
 ---
 
+## Comparing Runs (Regression Detection)
+
+An eval tells you how the system does today. What breaks products is the prompt tweak or model swap that quietly makes some answers worse while the average holds. `promptlens compare` diffs two stored runs, case by case:
+
+```bash
+# Establish a baseline
+promptlens run config.yaml
+# ... change your prompt or model ...
+promptlens run config.yaml
+
+# Compare the last known-good run against the newest one
+promptlens compare <baseline_run_id> latest
+```
+
+Results are paired by test case and model, then classified:
+
+- **Regressed** - the judge score dropped by at least the threshold (default 1 point on the 1-5 scale), the case newly errored, or the case lost its judge score
+- **Improved** - the score rose by at least the threshold, or a baseline error was resolved
+- **Unchanged** - the delta stayed within the threshold
+- **Incomparable** - the baseline case had no judge score
+
+Test cases and models present in only one run are reported as suite drift and excluded from the comparison, so editing your golden set never produces false regressions.
+
+Useful options:
+
+```bash
+# Fail CI when anything regressed (exit code 2, matching --fail-under semantics)
+promptlens compare baseline-run latest --fail-on-regression
+
+# Only flag drops of 2+ points
+promptlens compare baseline-run latest --threshold 2
+
+# Write reports: markdown for PR comments, JSON for tooling
+promptlens compare baseline-run latest --markdown comparison.md --json comparison.json
+```
+
+Example GitHub Actions step:
+
+```yaml
+- name: Run prompt evals
+  run: promptlens run config.yaml
+
+- name: Compare against baseline
+  run: |
+    promptlens compare "$BASELINE_RUN_ID" latest \
+      --fail-on-regression --markdown comparison.md
+
+- name: Upload comparison report
+  uses: actions/upload-artifact@v4
+  if: always()
+  with:
+    name: eval-comparison
+    path: comparison.md
+```
+
+---
+
 ## Examples
 
 ### Basic Single Model Evaluation
@@ -415,8 +476,8 @@ Ensure prompt changes don't break existing behavior:
 
 1. Maintain a golden set of important test cases
 2. Run before and after making changes
-3. Compare results to catch regressions
-4. Integrate into CI/CD pipeline
+3. Run `promptlens compare <baseline> latest` to catch regressions case by case
+4. Gate CI/CD with `--fail-on-regression`
 
 ### Agent Workflow Testing
 
@@ -593,9 +654,10 @@ class RuleBasedJudge(BaseJudge):
 - [x] JSON/CSV/Markdown export
 - [x] JUnit XML export and `--fail-under` CI quality gate
 - [x] Parallel execution with retry logic
+- [x] Cross-run comparison with `--fail-on-regression` CI gate
 - [ ] Multi-judge consensus scoring
 - [ ] Synthetic test case generation
-- [ ] Cross-run comparison and tracking
+- [ ] Historical trend tracking across many runs
 - [ ] GitHub Action for CI/CD
 - [ ] Web UI for report exploration
 - [ ] Embedding-based similarity scoring

@@ -14,6 +14,7 @@ from rich.console import Console
 from rich.logging import RichHandler
 
 from promptlens import __version__
+from promptlens.comparison import DEFAULT_THRESHOLD, compare_runs, render_markdown
 from promptlens.exporters.csv_exporter import CSVExporter
 from promptlens.exporters.html_exporter import HTMLExporter
 from promptlens.exporters.json_exporter import JSONExporter
@@ -325,6 +326,189 @@ def list_runs(output_dir: str) -> None:
 
     except Exception as e:
         console.print(f"[red]Error listing runs: {e}[/red]")
+        sys.exit(1)
+
+
+def _load_run_result(output_dir: str, run_id: str) -> RunResult:
+    """Load a stored run's results.json as a RunResult.
+
+    Accepts "latest" as a run id, since the run command maintains a
+    latest symlink inside the results directory.
+
+    Args:
+        output_dir: Results directory containing run subdirectories
+        run_id: Run identifier (directory name) or "latest"
+
+    Raises:
+        FileNotFoundError: If the run's results.json does not exist
+    """
+    import json
+
+    results_file = Path(output_dir) / run_id / "results.json"
+    if not results_file.exists():
+        raise FileNotFoundError(f"Run {run_id} not found in {output_dir}")
+
+    with open(results_file) as f:
+        data = json.load(f)
+    return RunResult(**data)
+
+
+@cli.command()
+@click.argument("baseline")
+@click.argument("candidate")
+@click.option(
+    "--output-dir",
+    type=click.Path(),
+    default="./promptlens_results",
+    help="Results directory containing both runs",
+)
+@click.option(
+    "--threshold",
+    type=click.FloatRange(min=0.0, min_open=True),
+    default=DEFAULT_THRESHOLD,
+    show_default=True,
+    help=(
+        "Minimum judge-score drop (1-5 scale) counted as a regression. "
+        "The same threshold marks improvements."
+    ),
+)
+@click.option(
+    "--fail-on-regression",
+    is_flag=True,
+    help="Quality gate for CI: exit with code 2 if any case regressed",
+)
+@click.option(
+    "--markdown",
+    "markdown_path",
+    type=click.Path(),
+    help="Write a markdown comparison report to this path",
+)
+@click.option(
+    "--json",
+    "json_path",
+    type=click.Path(),
+    help="Write the full comparison as JSON to this path",
+)
+def compare(
+    baseline: str,
+    candidate: str,
+    output_dir: str,
+    threshold: float,
+    fail_on_regression: bool,
+    markdown_path: Optional[str],
+    json_path: Optional[str],
+) -> None:
+    """Compare two runs and detect regressions.
+
+    Pairs results by test case and model, then reports score, cost, and
+    latency deltas. A case regresses when its judge score drops by at least
+    the threshold, when it newly errors, or when it loses its judge score.
+
+    BASELINE: Run ID of the reference run (or "latest")
+
+    CANDIDATE: Run ID of the run to check (or "latest")
+
+    Examples:
+        promptlens compare run-a run-b
+        promptlens compare prod-baseline latest --fail-on-regression
+        promptlens compare run-a run-b --markdown comparison.md
+    """
+    try:
+        console.print(f"\n[cyan]Loading baseline run {baseline}...[/cyan]")
+        baseline_result = _load_run_result(output_dir, baseline)
+        console.print(f"[cyan]Loading candidate run {candidate}...[/cyan]")
+        candidate_result = _load_run_result(output_dir, candidate)
+
+        comparison = compare_runs(baseline_result, candidate_result, threshold=threshold)
+
+        if not comparison.models_compared:
+            console.print(
+                "\n[yellow]The two runs share no models; nothing to compare.[/yellow]"
+            )
+        if not comparison.cases and comparison.models_compared:
+            console.print(
+                "\n[yellow]The two runs share no test cases; nothing to compare.[/yellow]"
+            )
+
+        # Per-model summary table
+        from rich.table import Table
+
+        table = Table(title=f"\n{comparison.baseline_run_id} → {comparison.candidate_run_id}")
+        table.add_column("Model", style="cyan")
+        table.add_column("Baseline Avg", justify="right")
+        table.add_column("Candidate Avg", justify="right")
+        table.add_column("Delta", justify="right")
+        table.add_column("Regressed", justify="right", style="red")
+        table.add_column("Improved", justify="right", style="green")
+        table.add_column("Unchanged", justify="right")
+        table.add_column("Cost Delta", justify="right")
+
+        for summary in comparison.model_summaries:
+            def fmt(value: Optional[float], pattern: str) -> str:
+                return pattern.format(value) if value is not None else "-"
+
+            table.add_row(
+                summary.model,
+                fmt(summary.baseline_avg_score, "{:.2f}"),
+                fmt(summary.candidate_avg_score, "{:.2f}"),
+                fmt(summary.avg_score_delta, "{:+.2f}"),
+                str(summary.regressed),
+                str(summary.improved),
+                str(summary.unchanged),
+                f"${summary.cost_delta_usd:+.4f}",
+            )
+        console.print(table)
+
+        # Regressed case details
+        for case in comparison.regressed_cases:
+            before = case.baseline_score if case.baseline_score is not None else "-"
+            after = case.candidate_score if case.candidate_score is not None else "-"
+            console.print(
+                f"  [red]✗[/red] {case.test_case_id} ({case.model}): "
+                f"{before} → {after} ({case.reason})"
+            )
+
+        # Suite drift warnings
+        for label, items in (
+            ("Models added", comparison.models_added),
+            ("Models removed", comparison.models_removed),
+            ("Test cases added", comparison.cases_added),
+            ("Test cases removed", comparison.cases_removed),
+        ):
+            if items:
+                console.print(
+                    f"\n[yellow]{label} (excluded from comparison): "
+                    f"{', '.join(items)}[/yellow]"
+                )
+
+        # Optional file outputs
+        if markdown_path:
+            md_file = Path(markdown_path)
+            md_file.parent.mkdir(parents=True, exist_ok=True)
+            md_file.write_text(render_markdown(comparison), encoding="utf-8")
+            console.print(f"\n[green]✓[/green] Markdown report: {md_file}")
+
+        if json_path:
+            json_file = Path(json_path)
+            json_file.parent.mkdir(parents=True, exist_ok=True)
+            json_file.write_text(comparison.model_dump_json(indent=2), encoding="utf-8")
+            console.print(f"[green]✓[/green] JSON report: {json_file}")
+
+        # Verdict and optional gate
+        if comparison.has_regressions:
+            console.print(
+                f"\n[bold red]✗ {comparison.regression_count} regression(s) detected[/bold red]"
+            )
+            if fail_on_regression:
+                sys.exit(2)
+        else:
+            console.print("\n[bold green]✓ No regressions detected[/bold green]")
+
+    except SystemExit:
+        raise
+    except Exception as e:
+        console.print(f"\n[bold red]Error:[/bold red] {e}")
+        logging.exception("Comparison failed")
         sys.exit(1)
 
 
