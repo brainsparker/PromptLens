@@ -18,6 +18,7 @@ PromptLens runs golden test sets against multiple models, scores outputs using L
 - **Beautiful Reports** - Interactive HTML reports with charts, comparisons, and detailed results
 - **Multiple Export Formats** - HTML, JSON, CSV, Markdown, and JUnit XML outputs
 - **CI-Native Quality Gates** - JUnit XML reports plus a `--fail-under` score gate that fails the build on quality regressions
+- **Run Comparison & Regression Detection** - `promptlens compare` diffs two runs, flags per-case regressions, and can fail CI with `--fail-on-regression`
 - **Parallel Execution** - Async execution with configurable concurrency and retry logic
 - **Portable & Local** - No cloud backend, all data stays on your machine
 - **Easy to Extend** - Plugin architecture for custom providers, judges, and exporters
@@ -167,6 +168,9 @@ promptlens list-runs
 
 # Export a run to different format
 promptlens export <run_id> --format html
+
+# Compare two runs and detect regressions
+promptlens compare <baseline_run_id> latest
 
 # Get help
 promptlens --help
@@ -344,6 +348,31 @@ Example GitHub Actions step:
 ```
 
 The same `junit.xml` works with GitLab (`artifacts:reports:junit`), Jenkins, CircleCI, and any other JUnit-compatible report viewer.
+
+### Comparing Runs and Catching Regressions
+
+After a prompt tweak or a model swap, the question that matters is: is this better or worse than what we had? `promptlens compare` answers it by diffing two runs.
+
+```bash
+# Compare a known-good baseline against the most recent run
+promptlens compare 20260810_120000 latest
+
+# Fail the build if any test case regressed
+promptlens compare baseline-run pr-run --fail-on-regression
+
+# Write reports for PR comments or CI artifacts
+promptlens compare baseline-run pr-run --output comparison.md --json-output comparison.json
+```
+
+How it works:
+
+- Runs are referenced by run ID (from `promptlens list-runs`), by run directory, or by a direct path to a `results.json`. `latest` resolves to the most recent run.
+- Test cases are paired by (test case ID, model), so comparisons survive reordered, added, and removed cases. Added and removed cases are reported but never counted as regressions.
+- A paired case is regressed when its judge score drops (beyond `--score-threshold`, default 0) or when it newly errors. A case that used to error and now succeeds counts as improved.
+- With `--fail-on-regression`, the command exits non-zero when any paired case regressed, so you can gate merges on it. Without the flag, the comparison is informational.
+- Use `--score-threshold 1` to ignore one-point judge jitter on the 1-5 scale and only flag substantive drops.
+
+Typical CI recipe: keep a baseline `results.json` from your main branch as a build artifact, run the same golden set on the PR branch, then `promptlens compare baseline/results.json pr/results.json --fail-on-regression --output comparison.md` and post `comparison.md` as the PR comment.
 
 ---
 
