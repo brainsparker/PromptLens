@@ -406,5 +406,205 @@ def export(run_id: str, export_format: str, output: Optional[str], output_dir: s
         sys.exit(1)
 
 
+def _resolve_run_reference(run_ref: str, output_dir: str) -> Path:
+    """Resolve a run reference to a results.json path.
+
+    Accepts, in order of precedence:
+    - a direct path to a results.json file
+    - a path to a run directory containing results.json
+    - a run ID (or "latest") inside the output directory
+
+    Raises:
+        FileNotFoundError: If no results.json can be located
+    """
+    direct = Path(run_ref)
+    if direct.is_file():
+        return direct
+    if direct.is_dir() and (direct / "results.json").is_file():
+        return direct / "results.json"
+
+    in_output_dir = Path(output_dir) / run_ref / "results.json"
+    if in_output_dir.is_file():
+        return in_output_dir
+
+    raise FileNotFoundError(
+        f"Could not find results for '{run_ref}'. Pass a run ID from "
+        f"'promptlens list-runs', a run directory, or a results.json path."
+    )
+
+
+def _load_run_result(results_file: Path) -> RunResult:
+    """Load a RunResult from a results.json file."""
+    import json
+
+    with open(results_file, encoding="utf-8") as f:
+        data = json.load(f)
+    return RunResult(**data)
+
+
+@cli.command()
+@click.argument("baseline")
+@click.argument("candidate")
+@click.option(
+    "--output-dir",
+    type=click.Path(),
+    default="./promptlens_results",
+    help="Results directory used to resolve run IDs",
+)
+@click.option(
+    "--score-threshold",
+    type=click.IntRange(min=0),
+    default=0,
+    help="Judge-score change (1-5 scale) a paired case must exceed to count "
+    "as regressed or improved. 0 flags any decrease.",
+)
+@click.option(
+    "--fail-on-regression",
+    is_flag=True,
+    default=False,
+    help="Exit with a non-zero status if any paired case regressed. "
+    "Use as a CI gate alongside 'promptlens run --fail-under'.",
+)
+@click.option(
+    "--output",
+    type=click.Path(),
+    help="Write a Markdown comparison report to this path",
+)
+@click.option(
+    "--json-output",
+    type=click.Path(),
+    help="Write the full comparison as JSON to this path",
+)
+def compare(
+    baseline: str,
+    candidate: str,
+    output_dir: str,
+    score_threshold: int,
+    fail_on_regression: bool,
+    output: Optional[str],
+    json_output: Optional[str],
+) -> None:
+    """Compare two runs and detect regressions.
+
+    BASELINE and CANDIDATE are run IDs (see 'promptlens list-runs'),
+    run directories, or paths to results.json files. 'latest' resolves
+    to the most recent run in the output directory.
+
+    Test cases are paired by (test case ID, model), so comparisons
+    survive reordered, added, and removed cases.
+
+    Examples:
+        promptlens compare 20260810_1200 latest
+        promptlens compare baseline/results.json candidate/results.json
+        promptlens compare main-run pr-run --fail-on-regression
+    """
+    from promptlens.comparison import compare_runs, render_markdown
+
+    try:
+        baseline_file = _resolve_run_reference(baseline, output_dir)
+        candidate_file = _resolve_run_reference(candidate, output_dir)
+
+        baseline_run = _load_run_result(baseline_file)
+        candidate_run = _load_run_result(candidate_file)
+
+        comparison = compare_runs(
+            baseline_run, candidate_run, score_threshold=score_threshold
+        )
+    except Exception as e:
+        console.print(f"[red]Comparison failed: {e}[/red]")
+        sys.exit(1)
+
+    from rich.table import Table
+
+    summary_table = Table(title="Comparison Summary")
+    summary_table.add_column("Model")
+    summary_table.add_column("Baseline avg", justify="right")
+    summary_table.add_column("Candidate avg", justify="right")
+    summary_table.add_column("Delta", justify="right")
+    summary_table.add_column("Regressed", justify="right")
+    summary_table.add_column("Improved", justify="right")
+
+    for model_summary in comparison.model_summaries:
+        baseline_avg = (
+            f"{model_summary.baseline_avg_score:.2f}"
+            if model_summary.baseline_avg_score is not None
+            else "-"
+        )
+        candidate_avg = (
+            f"{model_summary.candidate_avg_score:.2f}"
+            if model_summary.candidate_avg_score is not None
+            else "-"
+        )
+        delta = (
+            f"{model_summary.avg_score_delta:+.2f}"
+            if model_summary.avg_score_delta is not None
+            else "-"
+        )
+        regressed_cell = (
+            f"[red]{model_summary.regressed}[/red]"
+            if model_summary.regressed
+            else "0"
+        )
+        summary_table.add_row(
+            model_summary.model,
+            baseline_avg,
+            candidate_avg,
+            delta,
+            regressed_cell,
+            str(model_summary.improved),
+        )
+
+    console.print()
+    console.print(summary_table)
+
+    regressions = comparison.regressions
+    if regressions:
+        console.print(f"\n[red]✗ {len(regressions)} regression(s) detected:[/red]")
+        for case in regressions:
+            if case.candidate_error and not case.baseline_error:
+                detail = f"now errors: {case.candidate_error}"
+            else:
+                detail = (
+                    f"score {case.baseline_score} → {case.candidate_score}"
+                )
+            console.print(f"  [red]{case.test_case_id}[/red] ({case.model}): {detail}")
+    else:
+        console.print("\n[green]✓ No regressions detected[/green]")
+
+    try:
+        if output:
+            report_path = Path(output)
+            if report_path.parent != Path("."):
+                report_path.parent.mkdir(parents=True, exist_ok=True)
+            report_path.write_text(render_markdown(comparison), encoding="utf-8")
+            console.print(f"[green]✓[/green] Markdown report written to {output}")
+
+        if json_output:
+            import json
+
+            json_path = Path(json_output)
+            if json_path.parent != Path("."):
+                json_path.parent.mkdir(parents=True, exist_ok=True)
+            with open(json_path, "w", encoding="utf-8") as f:
+                json.dump(
+                    comparison.model_dump(mode="json"),
+                    f,
+                    indent=2,
+                    ensure_ascii=False,
+                    default=str,
+                )
+            console.print(f"[green]✓[/green] JSON comparison written to {json_output}")
+    except Exception as e:
+        console.print(f"[red]Failed to write comparison report: {e}[/red]")
+        sys.exit(1)
+
+    if fail_on_regression and comparison.has_regressions():
+        console.print(
+            f"\n[red]Failing: --fail-on-regression is set and "
+            f"{len(regressions)} case(s) regressed[/red]"
+        )
+        sys.exit(1)
+
+
 if __name__ == "__main__":
     cli()
