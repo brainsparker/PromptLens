@@ -18,6 +18,7 @@ PromptLens runs golden test sets against multiple models, scores outputs using L
 - **Beautiful Reports** - Interactive HTML reports with charts, comparisons, and detailed results
 - **Multiple Export Formats** - HTML, JSON, CSV, Markdown, and JUnit XML outputs
 - **CI-Native Quality Gates** - JUnit XML reports plus a `--fail-under` score gate that fails the build on quality regressions
+- **Run-over-Run Comparison** - `promptlens compare` diffs two runs case by case, flags regressions and improvements, and can fail CI when a prompt change makes things worse
 - **Parallel Execution** - Async execution with configurable concurrency and retry logic
 - **Portable & Local** - No cloud backend, all data stays on your machine
 - **Easy to Extend** - Plugin architecture for custom providers, judges, and exporters
@@ -167,6 +168,9 @@ promptlens list-runs
 
 # Export a run to different format
 promptlens export <run_id> --format html
+
+# Compare two runs and flag regressions
+promptlens compare <baseline_run_id> <candidate_run_id>
 
 # Get help
 promptlens --help
@@ -345,6 +349,52 @@ Example GitHub Actions step:
 
 The same `junit.xml` works with GitLab (`artifacts:reports:junit`), Jenkins, CircleCI, and any other JUnit-compatible report viewer.
 
+### Comparing Runs and Catching Regressions
+
+`--fail-under` gates on an absolute score. `promptlens compare` answers the more common question: did my prompt or model change make anything worse than it was before?
+
+```bash
+# Baseline once (e.g. on main)
+promptlens run config.yaml
+# ... change your prompt or model ...
+promptlens run config.yaml
+
+# Diff the candidate against the baseline
+promptlens compare <baseline_run_id> latest
+```
+
+The comparison matches test cases between the two runs (per model), classifies each shared case as improved, regressed, or unchanged, and reports average score, cost, and latency deltas. A case that succeeded in the baseline but errored in the candidate counts as a regression even without judge scores.
+
+Useful options:
+
+```bash
+# Fail CI (exit code 2) if any case regressed
+promptlens compare <baseline> latest --fail-on-regression
+
+# Only treat drops of 2+ judge points as regressions
+promptlens compare <baseline> latest --threshold 2
+
+# Write a Markdown diff, ready to post as a PR comment
+promptlens compare <baseline> latest --format md --output comparison.md
+
+# Compare across models: same golden set, different model
+promptlens compare <baseline> latest --baseline-model gpt-4o --candidate-model claude-sonnet-4-5
+```
+
+Example GitHub Actions pattern (baseline stored as an artifact or committed fixture):
+
+```yaml
+- name: Run prompt evals
+  run: promptlens run config.yaml
+
+- name: Compare against baseline
+  run: promptlens compare "$BASELINE_RUN_ID" latest --fail-on-regression --format md --output comparison.md
+
+- name: Post comparison on the PR
+  if: always()
+  run: gh pr comment "$PR_NUMBER" --body-file comparison.md
+```
+
 ---
 
 ## Examples
@@ -415,8 +465,8 @@ Ensure prompt changes don't break existing behavior:
 
 1. Maintain a golden set of important test cases
 2. Run before and after making changes
-3. Compare results to catch regressions
-4. Integrate into CI/CD pipeline
+3. Diff the runs with `promptlens compare <baseline> <candidate>` to catch per-case regressions
+4. Gate CI with `--fail-on-regression`
 
 ### Agent Workflow Testing
 

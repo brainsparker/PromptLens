@@ -52,6 +52,29 @@ def _remove_path_if_exists(path: Path) -> None:
         shutil.rmtree(path)
 
 
+def _load_run(output_dir: str, run_id: str) -> "RunResult":
+    """Load a saved run's results.json as a RunResult.
+
+    Args:
+        output_dir: Results directory (e.g. ./promptlens_results)
+        run_id: Run identifier, or "latest" to follow the latest symlink
+
+    Returns:
+        The parsed RunResult
+
+    Raises:
+        FileNotFoundError: If the run directory or results.json is missing
+    """
+    import json
+
+    results_file = Path(output_dir) / run_id / "results.json"
+    if not results_file.exists():
+        raise FileNotFoundError(f"Run {run_id} not found in {output_dir}")
+    with open(results_file) as f:
+        data = json.load(f)
+    return RunResult(**data)
+
+
 def _check_fail_under(result: "RunResult", fail_under: float) -> list:
     """Return models whose average judge score falls below the gate.
 
@@ -403,6 +426,209 @@ def export(run_id: str, export_format: str, output: Optional[str], output_dir: s
 
     except Exception as e:
         console.print(f"[red]Export failed: {e}[/red]")
+        sys.exit(1)
+
+
+@cli.command()
+@click.argument("baseline_run")
+@click.argument("candidate_run")
+@click.option(
+    "--output-dir",
+    type=click.Path(),
+    default="./promptlens_results",
+    help="Results directory containing both runs",
+)
+@click.option(
+    "--threshold",
+    type=click.FloatRange(0.0, 4.0),
+    default=0.0,
+    help=(
+        "Minimum judge-score drop (in points, 1-5 scale) for a case to "
+        "count as a regression. 0 means any drop regresses."
+    ),
+)
+@click.option(
+    "--baseline-model",
+    default=None,
+    help="Compare only this model from the baseline run (requires --candidate-model)",
+)
+@click.option(
+    "--candidate-model",
+    default=None,
+    help="Compare only this model from the candidate run (requires --baseline-model)",
+)
+@click.option(
+    "--format",
+    "output_format",
+    type=click.Choice(["md", "json"], case_sensitive=False),
+    default=None,
+    help="Also write the comparison to a file in this format",
+)
+@click.option(
+    "--output",
+    type=click.Path(),
+    default=None,
+    help="Output file path for --format (default: auto-generated)",
+)
+@click.option(
+    "--fail-on-regression",
+    is_flag=True,
+    help="Quality gate for CI: exit with code 2 if any case regressed",
+)
+def compare(
+    baseline_run: str,
+    candidate_run: str,
+    output_dir: str,
+    threshold: float,
+    baseline_model: Optional[str],
+    candidate_model: Optional[str],
+    output_format: Optional[str],
+    output: Optional[str],
+    fail_on_regression: bool,
+) -> None:
+    """Compare two runs and report per-case regressions and improvements.
+
+    BASELINE_RUN: Run ID of the reference run (or "latest")
+
+    CANDIDATE_RUN: Run ID of the new run to evaluate (or "latest")
+
+    Examples:
+        promptlens compare run_abc run_def
+        promptlens compare run_abc latest --fail-on-regression
+        promptlens compare run_abc run_def --threshold 1 --format md
+        promptlens compare run_abc run_def --baseline-model gpt-4o --candidate-model claude-sonnet-4-5
+    """
+    try:
+        from rich.table import Table
+
+        from promptlens.comparison import (
+            STATUS_IMPROVED,
+            STATUS_REGRESSED,
+            compare_runs,
+            comparison_to_markdown,
+        )
+
+        if (baseline_model is None) != (candidate_model is None):
+            console.print(
+                "[red]--baseline-model and --candidate-model must be used together[/red]"
+            )
+            sys.exit(1)
+
+        console.print(f"\n[cyan]Loading baseline run {baseline_run}...[/cyan]")
+        baseline = _load_run(output_dir, baseline_run)
+        console.print(f"[cyan]Loading candidate run {candidate_run}...[/cyan]")
+        candidate = _load_run(output_dir, candidate_run)
+
+        result = compare_runs(
+            baseline,
+            candidate,
+            regression_threshold=threshold,
+            baseline_model=baseline_model,
+            candidate_model=candidate_model,
+        )
+
+        # Summary
+        console.print(
+            f"\n[bold]Baseline:[/bold] {result.baseline_run_name or result.baseline_run_id}"
+            f"  [bold]Candidate:[/bold] {result.candidate_run_name or result.candidate_run_id}"
+        )
+        if result.avg_score_delta is not None:
+            console.print(
+                f"Average judge score: {result.baseline_avg_score:.2f} → "
+                f"{result.candidate_avg_score:.2f} ({result.avg_score_delta:+.2f})"
+            )
+        console.print(
+            f"Cost delta (shared cases): {result.total_cost_delta_usd:+.4f} USD"
+        )
+        if result.avg_latency_delta_ms is not None:
+            console.print(f"Average latency delta: {result.avg_latency_delta_ms:+.1f} ms")
+        console.print(
+            f"\n[red]{result.regressed} regressed[/red] / "
+            f"[green]{result.improved} improved[/green] / "
+            f"{result.unchanged} unchanged / {result.unscored} unscored / "
+            f"{result.added} added / {result.removed} removed"
+        )
+
+        # Per-case table for regressions and improvements
+        notable = [
+            c for c in result.cases if c.status in (STATUS_REGRESSED, STATUS_IMPROVED)
+        ]
+        if notable:
+            table = Table(title="Changed Cases")
+            table.add_column("Test Case")
+            table.add_column("Model")
+            table.add_column("Baseline")
+            table.add_column("Candidate")
+            table.add_column("Delta")
+            table.add_column("Status")
+            for case in notable:
+                model_cell = case.candidate_model or case.baseline_model or "-"
+                if (
+                    case.baseline_model
+                    and case.candidate_model
+                    and case.baseline_model != case.candidate_model
+                ):
+                    model_cell = f"{case.baseline_model} → {case.candidate_model}"
+                baseline_cell = (
+                    str(case.baseline_score)
+                    if case.baseline_score is not None
+                    else ("error" if case.baseline_error else "-")
+                )
+                candidate_cell = (
+                    str(case.candidate_score)
+                    if case.candidate_score is not None
+                    else ("error" if case.candidate_error else "-")
+                )
+                delta_cell = (
+                    f"{case.score_delta:+d}" if case.score_delta is not None else "-"
+                )
+                status_cell = (
+                    f"[red]{case.status}[/red]"
+                    if case.status == STATUS_REGRESSED
+                    else f"[green]{case.status}[/green]"
+                )
+                table.add_row(
+                    case.test_case_id,
+                    model_cell,
+                    baseline_cell,
+                    candidate_cell,
+                    delta_cell,
+                    status_cell,
+                )
+            console.print(table)
+
+        # Optional file output
+        if output_format:
+            output_format = output_format.lower()
+            if not output:
+                output = (
+                    f"compare_{result.baseline_run_id}_vs_"
+                    f"{result.candidate_run_id}.{output_format}"
+                )
+            if output_format == "md":
+                content = comparison_to_markdown(result)
+            else:
+                content = result.model_dump_json(indent=2)
+            with open(output, "w") as f:
+                f.write(content)
+            console.print(f"\n[green]✓[/green] Comparison written to {output}")
+
+        # Quality gate for CI
+        if fail_on_regression:
+            if result.has_regressions:
+                console.print(
+                    f"\n[bold red]✗ Regression gate failed: "
+                    f"{result.regressed} case(s) regressed[/bold red]"
+                )
+                sys.exit(2)
+            console.print("\n[bold green]✓ Regression gate passed[/bold green]")
+
+    except FileNotFoundError as e:
+        console.print(f"[red]{e}[/red]")
+        sys.exit(1)
+    except Exception as e:
+        console.print(f"[red]Comparison failed: {e}[/red]")
+        logging.exception("Comparison failed")
         sys.exit(1)
 
 
