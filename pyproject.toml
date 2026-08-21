@@ -8,6 +8,7 @@ license = "MIT"
 homepage = "https://github.com/brainsparker/PromptLens"
 repository = "https://github.com/brainsparker/PromptLens"
 keywords = ["llm", "evaluation", "testing", "ai", "prompts", "agents"]
+include = [{ path = "promptlens/templates/*.html" }]
 classifiers = [
     "Development Status :: 3 - Alpha",
     "Intended Audience :: Developers",

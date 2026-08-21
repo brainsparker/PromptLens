@@ -1,0 +1,183 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>{{ run_name }} · PromptLens Report</title>
+<style>
+  :root {
+    --bg: #f6f7f9;
+    --surface: #ffffff;
+    --border: #e3e6ea;
+    --text: #1a2129;
+    --muted: #5c6773;
+    --accent: #2563eb;
+    --score-1: #dc2626;
+    --score-2: #ea580c;
+    --score-3: #d97706;
+    --score-4: #65a30d;
+    --score-5: #16a34a;
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body {
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+    background: var(--bg);
+    color: var(--text);
+    line-height: 1.55;
+    padding: 32px 5%;
+  }
+  header { margin-bottom: 28px; }
+  .brand {
+    font-size: 13px; font-weight: 600; letter-spacing: 0.08em;
+    text-transform: uppercase; color: var(--accent); margin-bottom: 6px;
+  }
+  h1 { font-size: 26px; font-weight: 700; margin-bottom: 4px; }
+  .meta { color: var(--muted); font-size: 13px; }
+  .meta span + span::before { content: "·"; margin: 0 8px; color: var(--border); }
+
+  .cards { display: grid; grid-template-columns: repeat(auto-fit, minmax(160px, 1fr)); gap: 12px; margin: 24px 0; }
+  .card {
+    background: var(--surface); border: 1px solid var(--border);
+    border-radius: 8px; padding: 14px 16px;
+  }
+  .card .label { font-size: 11px; text-transform: uppercase; letter-spacing: 0.06em; color: var(--muted); }
+  .card .value { font-size: 22px; font-weight: 700; margin-top: 2px; }
+
+  h2 { font-size: 17px; font-weight: 700; margin: 32px 0 12px; }
+
+  table { width: 100%; border-collapse: collapse; background: var(--surface); border: 1px solid var(--border); border-radius: 8px; overflow: hidden; }
+  th, td { text-align: left; padding: 10px 14px; font-size: 14px; border-bottom: 1px solid var(--border); }
+  th { background: #fafbfc; font-size: 12px; text-transform: uppercase; letter-spacing: 0.05em; color: var(--muted); }
+  tr:last-child td { border-bottom: none; }
+
+  .dist { display: flex; gap: 3px; align-items: flex-end; height: 26px; }
+  .dist .bar { width: 14px; background: var(--border); border-radius: 2px 2px 0 0; position: relative; min-height: 2px; }
+  .dist .bar.s1 { background: var(--score-1); }
+  .dist .bar.s2 { background: var(--score-2); }
+  .dist .bar.s3 { background: var(--score-3); }
+  .dist .bar.s4 { background: var(--score-4); }
+  .dist .bar.s5 { background: var(--score-5); }
+
+  .case {
+    background: var(--surface); border: 1px solid var(--border);
+    border-radius: 8px; padding: 18px 20px; margin-bottom: 14px;
+  }
+  .case .case-id { font-size: 12px; color: var(--muted); font-family: ui-monospace, SFMono-Regular, Menlo, monospace; }
+  .case .query { font-size: 15px; font-weight: 600; margin: 4px 0; }
+  .case .expected { font-size: 13px; color: var(--muted); margin-bottom: 12px; }
+  .case .expected strong { color: var(--text); font-weight: 600; }
+
+  .response { border: 1px solid var(--border); border-radius: 6px; padding: 12px 14px; margin-top: 10px; }
+  .response .rhead { display: flex; align-items: baseline; gap: 10px; flex-wrap: wrap; margin-bottom: 6px; }
+  .response .model { font-weight: 600; font-size: 14px; }
+  .response .provider { font-size: 12px; color: var(--muted); }
+  .response .stats { margin-left: auto; font-size: 12px; color: var(--muted); font-family: ui-monospace, SFMono-Regular, Menlo, monospace; }
+  .response .content { font-size: 14px; white-space: pre-wrap; }
+  .response .judge { margin-top: 8px; padding-top: 8px; border-top: 1px dashed var(--border); font-size: 13px; color: var(--muted); }
+  .response .error { color: var(--score-1); font-size: 13px; margin-top: 6px; }
+
+  .badge {
+    display: inline-block; min-width: 34px; text-align: center;
+    padding: 2px 8px; border-radius: 999px; font-size: 12px; font-weight: 700; color: #fff;
+  }
+  .badge.s1 { background: var(--score-1); }
+  .badge.s2 { background: var(--score-2); }
+  .badge.s3 { background: var(--score-3); }
+  .badge.s4 { background: var(--score-4); }
+  .badge.s5 { background: var(--score-5); }
+  .badge.none { background: var(--muted); }
+
+  footer { margin-top: 36px; font-size: 12px; color: var(--muted); }
+</style>
+</head>
+<body>
+<header>
+  <div class="brand">PromptLens</div>
+  <h1>{{ run_name }}</h1>
+  <div class="meta">
+    <span>Golden set: {{ golden_set_name }}</span>
+    <span>{{ timestamp }}</span>
+    <span>Run {{ run_id }}</span>
+  </div>
+</header>
+
+<div class="cards">
+  <div class="card"><div class="label">Models</div><div class="value">{{ model_count }}</div></div>
+  <div class="card"><div class="label">Test cases</div><div class="value">{{ test_case_count }}</div></div>
+  <div class="card"><div class="label">Total cost</div><div class="value">${{ "%.4f" | format(total_cost) }}</div></div>
+  <div class="card"><div class="label">Total time</div><div class="value">{{ "%.1f" | format(total_time / 1000) }}s</div></div>
+</div>
+
+<h2>Model comparison</h2>
+<table>
+  <thead>
+    <tr>
+      <th>Model</th>
+      <th>Avg score</th>
+      <th>Score distribution (1–5)</th>
+      <th>Responses</th>
+      <th>Total cost</th>
+      <th>Total latency</th>
+    </tr>
+  </thead>
+  <tbody>
+    {% for m in model_stats %}
+    {% set dist_max = m.score_distribution.values() | max %}
+    <tr>
+      <td><strong>{{ m.name }}</strong></td>
+      <td>
+        {% if m.average_score is not none %}
+        {% set avg_class = 's' ~ (m.average_score | round | int) %}
+        <span class="badge {{ avg_class }}">{{ "%.2f" | format(m.average_score) }}</span>
+        {% else %}
+        <span class="badge none">–</span>
+        {% endif %}
+      </td>
+      <td>
+        <div class="dist">
+          {% for score in range(1, 6) %}
+          {% set count = m.score_distribution.get(score, 0) %}
+          <div class="bar s{{ score }}" style="height: {{ (count / dist_max * 100) | round if dist_max else 2 }}%" title="{{ count }} response(s) scored {{ score }}"></div>
+          {% endfor %}
+        </div>
+      </td>
+      <td>{{ m.result_count }}</td>
+      <td>${{ "%.4f" | format(m.total_cost) }}</td>
+      <td>{{ "%.0f" | format(m.total_latency) }} ms</td>
+    </tr>
+    {% endfor %}
+  </tbody>
+</table>
+
+<h2>Results by test case</h2>
+{% for case in test_cases %}
+<div class="case">
+  <div class="case-id">{{ case.id }}</div>
+  <div class="query">{{ case.query }}</div>
+  <div class="expected"><strong>Expected:</strong> {{ case.expected_behavior }}</div>
+  {% for r in case.model_results %}
+  <div class="response">
+    <div class="rhead">
+      <span class="model">{{ r.model }}</span>
+      <span class="provider">{{ r.provider }}</span>
+      {% if r.score is not none %}
+      <span class="badge s{{ r.score }}">{{ r.score }}/5</span>
+      {% else %}
+      <span class="badge none">unscored</span>
+      {% endif %}
+      <span class="stats">{{ "%.0f" | format(r.latency_ms) }} ms · ${{ "%.4f" | format(r.cost_usd) }}</span>
+    </div>
+    {% if r.error %}
+    <div class="error">Error: {{ r.error }}</div>
+    {% else %}
+    <div class="content">{{ r.response }}</div>
+    {% endif %}
+    <div class="judge">{{ r.explanation }}</div>
+  </div>
+  {% endfor %}
+</div>
+{% endfor %}
+
+<footer>Generated by PromptLens · run {{ run_id }} · {{ timestamp }}</footer>
+</body>
+</html>
