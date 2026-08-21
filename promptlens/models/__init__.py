@@ -7,6 +7,11 @@ from promptlens.models.result import (
     EvaluationResult,
     RunResult,
 )
+from promptlens.models.comparison import (
+    CaseComparison,
+    ComparisonResult,
+    ModelComparison,
+)
 from promptlens.models.config import (
     ProviderConfig,
     ModelConfig,
@@ -23,6 +28,9 @@ __all__ = [
     "JudgeScore",
     "EvaluationResult",
     "RunResult",
+    "CaseComparison",
+    "ModelComparison",
+    "ComparisonResult",
     "ProviderConfig",
     "ModelConfig",
     "JudgeConfig",
