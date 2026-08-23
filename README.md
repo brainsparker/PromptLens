@@ -18,6 +18,7 @@ PromptLens runs golden test sets against multiple models, scores outputs using L
 - **Multi-Provider Support** - Test Anthropic (Claude), OpenAI (GPT), Google (Gemini), You.com, and local models (Ollama, LM Studio)
 - **Tool/Function Calling Evaluation** - Test tool usage with automatic + LLM judge scoring across 5 criteria
 - **LLM-as-Judge Scoring** - Automated evaluation using another LLM with configurable criteria
+- **Deterministic Assertions** - Zero-token checks (`is_json`, `json_schema`, `contains`, `not_contains`, `regex`, `starts_with`) that run before the judge; a failed assertion skips the judge call entirely
 - **Cost & Latency Tracking** - Monitor per-query costs and response times across models
 - **Beautiful Reports** - Interactive HTML reports with charts, comparisons, and detailed results
 - **Multiple Export Formats** - HTML, JSON, CSV, Markdown, and JUnit XML outputs
@@ -114,6 +115,47 @@ test_cases:
 ```
 
 Save as `my_tests.yaml`.
+
+### Deterministic Assertions (zero judge tokens)
+
+Test cases can declare an `assert` block of deterministic checks that run locally before the LLM judge. When any assertion fails, the case is marked failed and the judge call is skipped, so judge tokens are only spent on responses that pass the cheap checks first. This matters for structured-output evaluation: with schema-constrained generation now GA across providers, the question is no longer "is it valid JSON" but "are the values right", and you should not pay an LLM judge to check either.
+
+```yaml
+test_cases:
+  - id: "extract-001"
+    query: "Extract name and age as JSON from: 'Jane Doe, 34'"
+    expected_behavior: "Return valid JSON with correct values"
+    assert:
+      - type: is_json
+      - type: json_schema
+        value:
+          type: object
+          required: ["name", "age"]
+          properties:
+            name: { type: string }
+            age: { type: integer }
+      - type: contains
+        value: "Jane"
+```
+
+Supported assertion types:
+
+| Type | Value | Passes when |
+|------|-------|-------------|
+| `is_json` | none | The response parses as JSON |
+| `json_schema` | JSON Schema (mapping) | The response parses as JSON and validates against the schema |
+| `contains` | string | The response contains the substring (case-sensitive) |
+| `not_contains` | string | The response does not contain the substring |
+| `regex` | string | `re.search` finds a match in the response |
+| `starts_with` | string | The response (ignoring leading whitespace) starts with the prefix |
+
+Behavior details:
+
+- All assertions in a case are always evaluated, so a single run reports every failure at once.
+- Assertion outcomes appear in all export formats. In JUnit XML, a failed assertion is a `<failure type="AssertionFailed">`, so CI fails the build.
+- Assertion failures also fail the `--fail-under` quality gate, regardless of judge scores.
+- A golden set that uses only assertions (no judge needed) passes the gate when every assertion passes.
+- Cases without an `assert` block behave exactly as before. See `examples/golden_sets/structured_output.yaml` for a complete example.
 
 ### Creating a Configuration File
 
