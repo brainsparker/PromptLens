@@ -48,6 +48,22 @@ class ModelResponse(BaseModel):
     )
 
 
+class AssertionResult(BaseModel):
+    """Outcome of a single deterministic assertion check.
+
+    Attributes:
+        type: Assertion type that was evaluated (e.g., "is_json", "contains")
+        value: The assertion's configured value, if any
+        passed: Whether the check passed
+        message: Human-readable explanation of the outcome
+    """
+
+    type: str
+    value: Optional[Any] = None
+    passed: bool
+    message: str
+
+
 class JudgeScore(BaseModel):
     """Score from LLM judge.
 
@@ -94,6 +110,7 @@ class EvaluationResult(BaseModel):
         expected_behavior: What was expected
         model_response: The model's response with metadata
         judge_score: Score from the judge (if judging was performed)
+        assertion_results: Outcomes of deterministic assertions (if any were defined)
         timestamp: When the evaluation was performed
     """
 
@@ -102,7 +119,22 @@ class EvaluationResult(BaseModel):
     expected_behavior: str
     model_response: ModelResponse
     judge_score: Optional[JudgeScore] = None
+    assertion_results: List[AssertionResult] = Field(
+        default_factory=list,
+        description="Outcomes of deterministic assertion checks for this case"
+    )
     timestamp: datetime = Field(default_factory=datetime.utcnow)
+
+    def assertions_passed(self) -> Optional[bool]:
+        """Whether all assertions passed.
+
+        Returns:
+            None if the test case had no assertions, True if every assertion
+            passed, False if any assertion failed.
+        """
+        if not self.assertion_results:
+            return None
+        return all(a.passed for a in self.assertion_results)
 
 
 class RunResult(BaseModel):

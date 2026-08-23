@@ -54,10 +54,17 @@ def _remove_path_if_exists(path: Path) -> None:
 
 
 def _check_fail_under(result: "RunResult", fail_under: float) -> list:
-    """Return models whose average judge score falls below the gate.
+    """Return models that fail the quality gate.
+
+    A model fails the gate when its average judge score falls below the
+    threshold, or when any of its test cases failed a deterministic
+    assertion (assertion failures are definitive, regardless of scores).
 
     A model with no judge scores at all also fails the gate, since the gate
-    cannot be evaluated without scores and a silent pass would be misleading.
+    cannot be evaluated without scores and a silent pass would be
+    misleading. The one exception: a model whose every test case carried
+    assertions that all passed is a deterministic pass and does not need
+    judge scores.
 
     Args:
         result: The completed run result
@@ -68,8 +75,23 @@ def _check_fail_under(result: "RunResult", fail_under: float) -> list:
     """
     failing = []
     for model in result.models_tested:
+        model_results = [r for r in result.results if r.model_response.model == model]
         avg = result.get_average_score(model)
-        if avg is None or avg < fail_under:
+
+        has_assertion_failure = any(
+            r.assertions_passed() is False for r in model_results
+        )
+        if has_assertion_failure:
+            failing.append((model, avg))
+            continue
+
+        if avg is None:
+            all_deterministic_pass = bool(model_results) and all(
+                r.assertions_passed() for r in model_results
+            )
+            if not all_deterministic_pass:
+                failing.append((model, avg))
+        elif avg < fail_under:
             failing.append((model, avg))
     return failing
 
@@ -228,7 +250,18 @@ def run(
                 )
                 for model, avg in failing_models:
                     avg_display = f"{avg:.2f}" if avg is not None else "no scores"
-                    console.print(f"  {model}: average judge score {avg_display}")
+                    assertion_failures = sum(
+                        1
+                        for r in result.results
+                        if r.model_response.model == model
+                        and r.assertions_passed() is False
+                    )
+                    line = f"  {model}: average judge score {avg_display}"
+                    if assertion_failures:
+                        line += (
+                            f", {assertion_failures} case(s) with failed assertions"
+                        )
+                    console.print(line)
                 sys.exit(2)
             console.print(
                 f"\n[bold green]✓ Quality gate passed (--fail-under {fail_under:g})[/bold green]"

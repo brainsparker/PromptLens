@@ -16,6 +16,7 @@ from rich.progress import (
     TimeElapsedColumn,
 )
 
+from promptlens.judges.assertions import evaluate_assertions
 from promptlens.judges.llm_judge import LLMJudge
 from promptlens.loaders.yaml_loader import get_loader
 from promptlens.models.config import RunConfig
@@ -215,9 +216,27 @@ class Runner:
                 timeout_seconds=self.config.execution.timeout_seconds,
             )
 
-            # Judge the response (only if generation succeeded)
+            # Run deterministic assertions first (zero tokens). A failed
+            # assertion is a definitive failure, so the LLM judge call is
+            # skipped for that case.
+            assertion_results = []
+            assertions_failed = False
+            if not model_response.error and test_case.assertions:
+                assertion_results = evaluate_assertions(
+                    model_response.content, test_case.assertions
+                )
+                assertions_failed = any(not a.passed for a in assertion_results)
+                if assertions_failed:
+                    failed_types = [a.type for a in assertion_results if not a.passed]
+                    logger.info(
+                        f"Test case '{test_case.id}' failed assertion(s) "
+                        f"{failed_types}; skipping LLM judge"
+                    )
+
+            # Judge the response (only if generation succeeded and no
+            # assertion already failed)
             judge_score = None
-            if not model_response.error:
+            if not model_response.error and not assertions_failed:
                 try:
                     judge_score = await self.judge.evaluate(test_case, model_response)
                 except Exception as e:
@@ -232,6 +251,7 @@ class Runner:
                 expected_behavior=test_case.expected_behavior,
                 model_response=model_response,
                 judge_score=judge_score,
+                assertion_results=assertion_results,
                 timestamp=datetime.utcnow(),
             )
 

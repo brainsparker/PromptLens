@@ -2,9 +2,71 @@
 
 from typing import Any, Dict, List, Optional
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 from promptlens.models.tools import ToolDefinition, ExpectedToolCall
+
+# Assertion types that require a value, and the Python type(s) the value must have.
+ASSERTION_VALUE_TYPES: Dict[str, tuple] = {
+    "json_schema": (dict,),
+    "contains": (str,),
+    "not_contains": (str,),
+    "regex": (str,),
+    "starts_with": (str,),
+}
+
+SUPPORTED_ASSERTION_TYPES = ("is_json",) + tuple(ASSERTION_VALUE_TYPES.keys())
+
+
+class Assertion(BaseModel):
+    """A deterministic check applied to a model response before LLM judging.
+
+    Assertions cost zero tokens: they run locally and, when any of them
+    fails, the LLM judge call is skipped entirely for that test case.
+
+    Attributes:
+        type: Assertion type. One of: is_json, json_schema, contains,
+            not_contains, regex, starts_with
+        value: Value for the check. Required for every type except is_json:
+            a JSON Schema dict for json_schema, a string for the rest.
+    """
+
+    type: str
+    value: Optional[Any] = None
+
+    model_config = ConfigDict(json_schema_extra={
+            "example": {
+                "type": "contains",
+                "value": "reset link",
+            }
+        })
+
+    @field_validator("type")
+    @classmethod
+    def validate_type(cls, v: str) -> str:
+        """Ensure the assertion type is supported."""
+        if v not in SUPPORTED_ASSERTION_TYPES:
+            raise ValueError(
+                f"Unsupported assertion type '{v}'. "
+                f"Supported types: {', '.join(SUPPORTED_ASSERTION_TYPES)}"
+            )
+        return v
+
+    @model_validator(mode="after")
+    def validate_value(self) -> "Assertion":
+        """Ensure the value is present and correctly typed for the assertion type."""
+        expected = ASSERTION_VALUE_TYPES.get(self.type)
+        if expected is None:
+            return self
+        if self.value is None:
+            raise ValueError(f"Assertion type '{self.type}' requires a value")
+        if not isinstance(self.value, expected):
+            type_names = " or ".join(t.__name__ for t in expected)
+            raise ValueError(
+                f"Assertion type '{self.type}' requires a {type_names} value, "
+                f"got {type(self.value).__name__}"
+            )
+        return self
 
 
 class TestCase(BaseModel):
@@ -22,6 +84,9 @@ class TestCase(BaseModel):
         expected_tool_calls: Expected tool calls the LLM should make
         evaluation_mode: Evaluation mode (standard/tool_only/tool_and_answer)
         tool_execution: Whether to actually execute tools (default: False)
+        assertions: Deterministic checks run before the LLM judge. Declared
+            with the "assert" key in YAML/JSON golden sets. When any
+            assertion fails, the judge call is skipped for that case.
     """
 
     id: str
@@ -50,7 +115,17 @@ class TestCase(BaseModel):
         description="Whether to actually execute tools (default: False, evaluation only)"
     )
 
-    model_config = ConfigDict(json_schema_extra={
+    # Deterministic assertions (optional, for backward compatibility)
+    assertions: List[Assertion] = Field(
+        default_factory=list,
+        alias="assert",
+        description=(
+            "Deterministic checks run against the response before the LLM judge. "
+            "Declared with the 'assert' key in golden sets."
+        ),
+    )
+
+    model_config = ConfigDict(populate_by_name=True, json_schema_extra={
             "example": {
                 "id": "cs-001",
                 "query": "How do I reset my password?",

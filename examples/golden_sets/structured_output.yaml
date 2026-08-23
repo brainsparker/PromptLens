@@ -1,0 +1,45 @@
+name: "Structured Output Evaluation"
+description: "Deterministic assertions for JSON and structured responses. Failed assertions skip the LLM judge, so these checks cost zero judge tokens."
+version: "1.0"
+
+test_cases:
+  - id: "so-001"
+    query: "Extract the name, email, and age from this text as JSON with keys name, email, age: 'Jane Doe, 34, reachable at jane@example.com'"
+    expected_behavior: "Return valid JSON with the correct name, email, and age values"
+    category: "extraction"
+    tags: ["json", "extraction"]
+    assert:
+      - type: is_json
+      - type: json_schema
+        value:
+          type: object
+          required: ["name", "email", "age"]
+          properties:
+            name:
+              type: string
+            email:
+              type: string
+            age:
+              type: integer
+
+  - id: "so-002"
+    query: "Classify the sentiment of 'I absolutely love this product!' Reply with exactly one word: positive, negative, or neutral."
+    expected_behavior: "Reply with the single word 'positive'"
+    category: "classification"
+    tags: ["classification", "sentiment"]
+    assert:
+      - type: regex
+        value: "^\\s*(positive|negative|neutral)\\s*$"
+      - type: contains
+        value: "positive"
+
+  - id: "so-003"
+    query: "Summarize the benefits of unit testing in two sentences. Do not use marketing language like 'game-changer' or 'revolutionary'."
+    expected_behavior: "A concise two-sentence summary in plain technical language"
+    category: "summarization"
+    tags: ["summarization", "style"]
+    assert:
+      - type: not_contains
+        value: "game-changer"
+      - type: not_contains
+        value: "revolutionary"
