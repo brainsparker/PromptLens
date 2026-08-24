@@ -5,6 +5,7 @@ from typing import Any, Dict, List, Optional
 
 from pydantic import BaseModel, Field
 
+from promptlens.models.checks import CheckResult
 from promptlens.models.tools import ToolCall, ToolCallEvaluation
 
 
@@ -84,6 +85,20 @@ class JudgeScore(BaseModel):
         description="Score for tool usage efficiency (0.0-1.0)"
     )
 
+    # Spend guard fields (optional, for backward compatibility)
+    cost_usd: Optional[float] = Field(
+        None,
+        description="Cost of the judge call that produced this score, in USD"
+    )
+    cached: bool = Field(
+        False,
+        description="Whether this score was served from the local judge cache"
+    )
+    error: Optional[str] = Field(
+        None,
+        description="Error message if the judge call failed (fallback scores carry this)"
+    )
+
 
 class EvaluationResult(BaseModel):
     """Complete evaluation result for one test case + model.
@@ -103,6 +118,16 @@ class EvaluationResult(BaseModel):
     model_response: ModelResponse
     judge_score: Optional[JudgeScore] = None
     timestamp: datetime = Field(default_factory=datetime.utcnow)
+
+    # Spend guard fields (optional, for backward compatibility)
+    check_results: List[CheckResult] = Field(
+        default_factory=list,
+        description="Results of deterministic checks run before the judge"
+    )
+    judge_skipped_reason: Optional[str] = Field(
+        None,
+        description="Why the judge call was skipped for this result (e.g. budget exhausted)"
+    )
 
 
 class RunResult(BaseModel):
@@ -128,6 +153,10 @@ class RunResult(BaseModel):
     results: List[EvaluationResult]
     total_cost_usd: float = 0.0
     total_time_ms: float = 0.0
+    judge_cost_usd: float = Field(
+        0.0,
+        description="Total spend on LLM judge calls for this run, in USD"
+    )
     metadata: Dict[str, Any] = Field(default_factory=dict)
 
     def get_average_score(self, model: Optional[str] = None) -> Optional[float]:

@@ -4,6 +4,7 @@ from typing import Any, Dict, List, Optional
 
 from pydantic import BaseModel, ConfigDict, Field
 
+from promptlens.models.checks import CheckSpec
 from promptlens.models.tools import ToolDefinition, ExpectedToolCall
 
 
@@ -48,6 +49,13 @@ class TestCase(BaseModel):
     tool_execution: bool = Field(
         default=False,
         description="Whether to actually execute tools (default: False, evaluation only)"
+    )
+    checks: List[CheckSpec] = Field(
+        default_factory=list,
+        description=(
+            "Deterministic checks run against the response before the LLM judge. "
+            "If any check fails, the judge call is skipped and the case scores 1."
+        )
     )
 
     model_config = ConfigDict(json_schema_extra={

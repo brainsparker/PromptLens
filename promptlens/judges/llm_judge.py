@@ -115,6 +115,7 @@ class LLMJudge(BaseJudge):
                 judge_model=self.config.model,
                 judge_provider=self.config.provider,
                 timestamp=datetime.utcnow(),
+                cost_usd=judge_response.cost_usd,
             )
 
         except Exception as e:
@@ -126,6 +127,7 @@ class LLMJudge(BaseJudge):
                 judge_model=self.config.model,
                 judge_provider=self.config.provider,
                 timestamp=datetime.utcnow(),
+                error=str(e),
             )
 
     async def _evaluate_with_tools(
@@ -232,6 +234,7 @@ class LLMJudge(BaseJudge):
                 tool_evaluations=tool_evaluations,
                 tool_usage_score=tool_usage_score,
                 tool_efficiency_score=tool_efficiency_score,
+                cost_usd=judge_response.cost_usd,
             )
 
         except Exception as e:
@@ -250,6 +253,7 @@ class LLMJudge(BaseJudge):
                 tool_evaluations=tool_evaluations,
                 tool_usage_score=avg_accuracy,
                 tool_efficiency_score=0.6 if all_correct else 0.3,
+                error=str(e),
             )
 
     @property

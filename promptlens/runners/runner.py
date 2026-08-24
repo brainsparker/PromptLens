@@ -4,6 +4,7 @@ import asyncio
 import logging
 import uuid
 from datetime import datetime
+from pathlib import Path
 from typing import List, Optional
 
 from rich.console import Console
@@ -16,10 +17,18 @@ from rich.progress import (
     TimeElapsedColumn,
 )
 
+from promptlens.judges.cache import JudgeCache
 from promptlens.judges.llm_judge import LLMJudge
+from promptlens.judges.spend import JudgeSpendTracker
 from promptlens.loaders.yaml_loader import get_loader
+from promptlens.models.checks import CheckResult, run_checks
 from promptlens.models.config import RunConfig
-from promptlens.models.result import EvaluationResult, RunResult
+from promptlens.models.result import (
+    EvaluationResult,
+    JudgeScore,
+    ModelResponse,
+    RunResult,
+)
 from promptlens.models.test_case import GoldenSet, TestCase
 from promptlens.providers.base import BaseProvider
 from promptlens.providers.factory import get_provider
@@ -66,6 +75,16 @@ class Runner:
         # Semaphore for rate limiting
         self.semaphore = asyncio.Semaphore(config.execution.parallel_requests)
 
+        # Judge spend guard: budget tracker, result cache, and gate counter
+        self.spend = JudgeSpendTracker(config.judge.budget_usd)
+        self.judge_cache: Optional[JudgeCache] = None
+        if config.judge.cache:
+            cache_path = (
+                Path(config.output.directory) / ".promptlens" / "judge_cache.json"
+            )
+            self.judge_cache = JudgeCache(cache_path)
+        self.gated_count = 0
+
     async def run(self) -> RunResult:
         """Run the complete evaluation.
 
@@ -92,9 +111,16 @@ class Runner:
         console.print(f"[yellow]Running evaluations...[/yellow]")
         results = await self._run_evaluations(golden_set)
 
+        # Persist any new judge verdicts for future runs
+        if self.judge_cache is not None:
+            self.judge_cache.flush()
+
         # Calculate totals
         total_cost = sum(r.model_response.cost_usd or 0.0 for r in results)
         total_time = sum(r.model_response.latency_ms for r in results)
+        judge_cost = sum(
+            r.judge_score.cost_usd or 0.0 for r in results if r.judge_score
+        )
 
         # Create run result
         run_result = RunResult(
@@ -106,10 +132,15 @@ class Runner:
             results=results,
             total_cost_usd=total_cost,
             total_time_ms=total_time,
+            judge_cost_usd=judge_cost,
             metadata={
                 "golden_set_path": self.config.golden_set,
                 "test_case_count": len(golden_set.test_cases),
                 "provider_count": len(self.providers),
+                "judge_cache_hits": self.judge_cache.hits if self.judge_cache else 0,
+                "judge_gated_by_checks": self.gated_count,
+                "judge_budget_usd": self.spend.budget_usd,
+                "judge_budget_skipped": self.spend.skipped_count,
             },
         )
 
@@ -217,11 +248,12 @@ class Runner:
 
             # Judge the response (only if generation succeeded)
             judge_score = None
+            check_results: List[CheckResult] = []
+            judge_skipped_reason = None
             if not model_response.error:
-                try:
-                    judge_score = await self.judge.evaluate(test_case, model_response)
-                except Exception as e:
-                    logger.error(f"Judge evaluation failed: {e}")
+                judge_score, check_results, judge_skipped_reason = (
+                    await self._judge_with_guard(test_case, model_response)
+                )
 
             # Update progress
             progress.update(task_id, advance=1)
@@ -233,7 +265,84 @@ class Runner:
                 model_response=model_response,
                 judge_score=judge_score,
                 timestamp=datetime.utcnow(),
+                check_results=check_results,
+                judge_skipped_reason=judge_skipped_reason,
             )
+
+    async def _judge_with_guard(
+        self,
+        test_case: TestCase,
+        model_response: ModelResponse,
+    ):
+        """Judge a response through the spend guard.
+
+        Order of operations:
+        1. Deterministic checks: if any fail, the case scores 1 and the
+           LLM judge is never called (zero judge spend).
+        2. Judge cache: identical judging contexts reuse the stored
+           verdict from a previous run (zero judge spend).
+        3. Judge budget: once the configured budget is exhausted, further
+           judge calls are skipped and reported.
+        4. Otherwise, call the LLM judge, record its cost, and cache the
+           verdict for future runs.
+
+        Args:
+            test_case: Test case being evaluated
+            model_response: Successful model response to judge
+
+        Returns:
+            Tuple of (judge_score, check_results, judge_skipped_reason)
+        """
+        # 1. Deterministic checks gate the judge call
+        check_results: List[CheckResult] = []
+        if test_case.checks:
+            check_results = run_checks(test_case.checks, model_response.content)
+            failed = [c for c in check_results if not c.passed]
+            if failed:
+                self.gated_count += 1
+                failure_summary = "; ".join(c.detail for c in failed)
+                judge_score = JudgeScore(
+                    score=1,
+                    explanation=(
+                        "Failed deterministic checks (LLM judge skipped, no judge "
+                        f"spend): {failure_summary}"
+                    ),
+                    judge_model="deterministic-checks",
+                    judge_provider="promptlens",
+                    timestamp=datetime.utcnow(),
+                    cost_usd=0.0,
+                )
+                return judge_score, check_results, None
+
+        # 2. Reuse a cached verdict when the judging context is identical
+        cache_key = None
+        if self.judge_cache is not None:
+            cache_key = JudgeCache.key(self.config.judge, test_case, model_response)
+            cached_score = self.judge_cache.get(cache_key)
+            if cached_score is not None:
+                return cached_score, check_results, None
+
+        # 3. Enforce the judge budget
+        if not self.spend.allows_call():
+            self.spend.record_skip()
+            reason = (
+                f"judge budget of ${self.spend.budget_usd:g} exhausted "
+                f"(spent ${self.spend.spent_usd:.4f})"
+            )
+            return None, check_results, reason
+
+        # 4. Pay for a judge call
+        try:
+            judge_score = await self.judge.evaluate(test_case, model_response)
+        except Exception as e:
+            logger.error(f"Judge evaluation failed: {e}")
+            return None, check_results, None
+
+        self.spend.record_cost(judge_score.cost_usd)
+        if self.judge_cache is not None and cache_key is not None:
+            self.judge_cache.put(cache_key, judge_score)
+
+        return judge_score, check_results, None
 
     def _print_summary(self, result: RunResult) -> None:
         """Print a summary of the run results.
@@ -259,6 +368,26 @@ class Runner:
         # Overall summary
         console.print(f"[bold]Overall[/bold]")
         console.print(f"  Total Cost: ${result.total_cost_usd:.4f}")
+        console.print(f"  Judge Cost: ${result.judge_cost_usd:.4f}")
         console.print(f"  Total Time: {result.total_time_ms:.0f}ms")
         console.print(f"  Test Cases: {len(result.results) // len(result.models_tested)}")
+
+        # Spend guard summary
+        cache_hits = self.judge_cache.hits if self.judge_cache else 0
+        if cache_hits or self.gated_count or self.spend.skipped_count:
+            console.print(f"\n[bold]Judge Spend Guard[/bold]")
+            if cache_hits:
+                console.print(
+                    f"  [green]✓[/green] {cache_hits} verdict(s) reused from cache ($0)"
+                )
+            if self.gated_count:
+                console.print(
+                    f"  [green]✓[/green] {self.gated_count} judge call(s) gated by "
+                    f"deterministic checks ($0)"
+                )
+            if self.spend.skipped_count:
+                console.print(
+                    f"  [yellow]⚠[/yellow] {self.spend.skipped_count} judge call(s) "
+                    f"skipped: budget of ${self.spend.budget_usd:g} exhausted"
+                )
         console.print()
