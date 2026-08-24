@@ -91,6 +91,11 @@ class JudgeConfig(BaseModel):
         temperature: Sampling temperature
         custom_prompt: Optional custom judge prompt template
         criteria: List of criteria to evaluate
+        cache: Whether to reuse cached judge verdicts for identical
+            responses (local JSON cache, enabled by default)
+        budget_usd: Maximum judge spend per run in USD. Once reached,
+            remaining judge calls are skipped and reported. None means
+            unlimited.
     """
 
     provider: str = "anthropic"
@@ -98,6 +103,15 @@ class JudgeConfig(BaseModel):
     temperature: float = 0.3
     custom_prompt: Optional[str] = None
     criteria: List[str] = Field(default_factory=lambda: ["accuracy", "helpfulness"])
+    cache: bool = True
+    budget_usd: Optional[float] = None
+
+    @field_validator("budget_usd")
+    @classmethod
+    def validate_budget_usd(cls, value: Optional[float]) -> Optional[float]:
+        if value is not None and value <= 0:
+            raise ValueError("budget_usd must be greater than 0")
+        return value
 
 
 class ExecutionConfig(BaseModel):

@@ -130,12 +130,33 @@ def cli(log_level: str) -> None:
         "failure threshold used by the junit export format."
     ),
 )
+@click.option(
+    "--judge-budget",
+    type=click.FloatRange(min=0, min_open=True),
+    default=None,
+    help=(
+        "Maximum LLM judge spend for this run in USD. Once reached, remaining "
+        "judge calls are skipped and reported. Guards CI against runaway "
+        "judge bills. Overrides judge.budget_usd from the config."
+    ),
+)
+@click.option(
+    "--no-judge-cache",
+    is_flag=True,
+    help=(
+        "Disable the local judge result cache. By default, identical "
+        "responses reuse the cached judge verdict from previous runs at "
+        "zero cost."
+    ),
+)
 def run(
     config: str,
     golden_set: Optional[str],
     output_dir: Optional[str],
     dry_run: bool,
     fail_under: Optional[float],
+    judge_budget: Optional[float],
+    no_judge_cache: bool,
 ) -> None:
     """Run evaluation with the given configuration file.
 
@@ -146,6 +167,8 @@ def run(
         promptlens run config.yaml --output-dir ./results
         promptlens run config.yaml --dry-run
         promptlens run config.yaml --fail-under 3.5
+        promptlens run config.yaml --judge-budget 5.00
+        promptlens run config.yaml --no-judge-cache
     """
     try:
         # Load config
@@ -158,6 +181,12 @@ def run(
         if output_dir:
             config_data.setdefault("output", {})
             config_data["output"]["directory"] = output_dir
+        if judge_budget is not None:
+            config_data.setdefault("judge", {})
+            config_data["judge"]["budget_usd"] = judge_budget
+        if no_judge_cache:
+            config_data.setdefault("judge", {})
+            config_data["judge"]["cache"] = False
 
         # Parse config
         try:

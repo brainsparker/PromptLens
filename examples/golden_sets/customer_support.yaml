@@ -8,12 +8,24 @@ test_cases:
     expected_behavior: "Provide clear step-by-step instructions for password reset, including where to find the reset link"
     category: "account_management"
     tags: ["password", "account", "security"]
+    # Deterministic checks run before the LLM judge. If any check fails,
+    # the case scores 1 and no judge tokens are spent on it.
+    checks:
+      - type: contains
+        value: "password"
+        case_sensitive: false
+      - type: max_length
+        value: 4000
 
   - id: "cs-002"
     query: "What's your refund policy?"
     expected_behavior: "Explain the 30-day refund policy clearly, including conditions and the process to request a refund"
     category: "policy"
     tags: ["refund", "policy", "billing"]
+    checks:
+      - type: contains
+        value: "refund"
+        case_sensitive: false
 
   - id: "cs-003"
     query: "My order hasn't arrived yet. What should I do?"

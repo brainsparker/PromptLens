@@ -23,6 +23,7 @@ PromptLens runs golden test sets against multiple models, scores outputs using L
 - **Multiple Export Formats** - HTML, JSON, CSV, Markdown, and JUnit XML outputs
 - **CI-Native Quality Gates** - JUnit XML reports plus a `--fail-under` score gate that fails the build on quality regressions
 - **Cross-Run Comparison** - Diff any two runs by test case and model with score, cost, and latency deltas, plus a `--fail-on-regression` CI gate
+- **Judge Spend Guard** - Deterministic checks that skip the judge on obviously-broken outputs, a local judge result cache that makes repeat runs free, and a per-run judge budget that stops runaway CI bills
 - **Parallel Execution** - Async execution with configurable concurrency and retry logic
 - **Portable & Local** - No cloud backend, all data stays on your machine
 - **Easy to Extend** - Plugin architecture for custom providers, judges, and exporters
@@ -162,6 +163,9 @@ promptlens run my_config.yaml
 # Run evaluation
 promptlens run <config.yaml>
 
+# Run with a judge spend cap and without the judge cache
+promptlens run <config.yaml> --judge-budget 5.00 --no-judge-cache
+
 # Validate a golden set
 promptlens validate <golden_set.yaml>
 
@@ -295,6 +299,8 @@ judge:
     - accuracy
     - helpfulness
     - safety
+  cache: true                       # Reuse cached judge verdicts (default: true)
+  budget_usd: 5.00                  # Max judge spend per run in USD (default: unlimited)
 ```
 
 ### Execution
@@ -350,6 +356,57 @@ Example GitHub Actions step:
 ```
 
 The same `junit.xml` works with GitLab (`artifacts:reports:junit`), Jenkins, CircleCI, and any other JUnit-compatible report viewer.
+
+---
+
+## Judge Spend Guard
+
+LLM-as-judge is the most expensive part of most eval suites: on retriggered CI pipelines, the judge often costs more than the models under test. PromptLens guards judge spend three ways, all local and on by default where safe.
+
+### 1. Deterministic checks (skip the judge on broken outputs)
+
+Declare cheap assertions on any test case. They run against the response before the judge is called. If any check fails, the case scores 1 with the failure details as the explanation, and no judge tokens are spent:
+
+```yaml
+test_cases:
+  - id: "cs-001"
+    query: "How do I reset my password?"
+    expected_behavior: "Provide clear step-by-step instructions"
+    checks:
+      - type: contains          # must mention the topic
+        value: "password"
+        case_sensitive: false
+      - type: not_regex         # no AI boilerplate
+        value: "(?i)as an ai"
+      - type: max_length        # no runaway responses
+        value: 4000
+```
+
+Available check types: `contains`, `not_contains`, `equals`, `regex`, `not_regex`, `json_valid`, `min_length`, `max_length`. Check results are recorded on every evaluation result, so passing checks show up in exports too.
+
+### 2. Judge result cache (repeat runs are free)
+
+Judge verdicts are cached in a local JSON file (`<output_dir>/.promptlens/judge_cache.json`), keyed by the judge model and settings, the test case, and the exact response text. Re-running an evaluation over unchanged responses reuses the stored verdict at zero cost. Anything that changes the judging context (a different response, judge model, or expected behavior) is a cache miss.
+
+The cache is on by default. Disable it for a run with:
+
+```bash
+promptlens run config.yaml --no-judge-cache
+```
+
+Cached verdicts are marked `cached: true` in exports, and failed judge calls are never cached.
+
+### 3. Judge budget (a circuit breaker for CI)
+
+Cap judge spend per run, either in the config (`judge.budget_usd`) or on the command line:
+
+```bash
+promptlens run config.yaml --judge-budget 5.00
+```
+
+Once the budget is exhausted, remaining judge calls are skipped and each affected result records why (`judge_skipped_reason`). The run completes, the summary reports how many calls were skipped, and unjudged cases surface as skipped in JUnit output, so a `--fail-under` gate still catches the condition. Model-under-test calls are never blocked, only judge calls. Because evaluations run concurrently, a burst of in-flight judge calls can overshoot the budget by up to `parallel_requests - 1` calls; treat the budget as a circuit breaker, not exact accounting.
+
+Every run now also reports total judge spend separately (`judge_cost_usd` in JSON exports and the run summary), so you can see what evaluation itself costs.
 
 ---
 
