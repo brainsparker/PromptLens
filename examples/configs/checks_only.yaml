@@ -1,0 +1,30 @@
+# Checks-only evaluation: no judge API key needed.
+#
+# The judge is disabled, so scoring comes entirely from the deterministic
+# checks declared in the golden set. Pair with --fail-on-checks in CI:
+#
+#   promptlens run examples/configs/checks_only.yaml --fail-on-checks
+#
+# The only key required is the one for the model under test. Point the
+# model at a local Ollama/LM Studio endpoint for a fully key-free run.
+
+golden_set: "./examples/golden_sets/structured_output.yaml"
+
+models:
+  - name: "Claude 3.5 Sonnet"
+    provider: "anthropic"
+    model: "claude-3-5-sonnet-20241022"
+    temperature: 0.0
+    max_tokens: 1024
+
+judge:
+  enabled: false
+
+execution:
+  parallel_requests: 3
+  retry_attempts: 3
+
+output:
+  directory: "./promptlens_results"
+  formats: ["html", "json", "junit"]
+  run_name: "Checks-Only Structured Output"

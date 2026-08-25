@@ -7,10 +7,15 @@ evaluated golden-set entry.
 
 Mapping rules:
     - A test case whose model response errored is reported as an <error>.
+    - A test case with any failed deterministic check is reported as a
+      <failure> (checks take precedence over the judge score, since they
+      are reproducible hard expectations).
     - A test case whose judge score is below the failure threshold is
       reported as a <failure>.
-    - A test case that was never judged (judging disabled or judge failed)
-      is reported as <skipped>, so CI does not report a false pass.
+    - A test case with neither a judge score nor deterministic checks is
+      reported as <skipped>, so CI does not report a false pass. A case
+      whose checks all passed counts as a pass even without a judge score,
+      because a deterministic verdict exists.
     - Everything else is a pass.
 """
 
@@ -126,6 +131,8 @@ class JUnitXMLExporter(BaseExporter):
 
             response_error = eval_result.model_response.error
             judge_score = eval_result.judge_score
+            failed_checks = eval_result.failed_checks
+            has_checks = bool(eval_result.check_results)
 
             if response_error:
                 errors += 1
@@ -133,14 +140,31 @@ class JUnitXMLExporter(BaseExporter):
                 error_el.set("message", _truncate(response_error, 300))
                 error_el.set("type", "ModelResponseError")
                 error_el.text = response_error
-            elif judge_score is None:
+            elif failed_checks:
+                failures += 1
+                failure_el = ET.SubElement(testcase, "failure")
+                failure_el.set(
+                    "message",
+                    f"{len(failed_checks)} deterministic check(s) failed",
+                )
+                failure_el.set("type", "CheckFailure")
+                failure_lines = [
+                    f"Query: {_truncate(eval_result.query, 500)}",
+                ]
+                for check_result in failed_checks:
+                    failure_lines.append(
+                        f"FAILED {check_result.description}: "
+                        f"{_truncate(check_result.detail, 500)}"
+                    )
+                failure_el.text = "\n".join(failure_lines)
+            elif judge_score is None and not has_checks:
                 skipped += 1
                 skipped_el = ET.SubElement(testcase, "skipped")
                 skipped_el.set(
                     "message",
                     "No judge score available (judging disabled or judge failed)",
                 )
-            elif judge_score.score < self.fail_under:
+            elif judge_score is not None and judge_score.score < self.fail_under:
                 failures += 1
                 failure_el = ET.SubElement(testcase, "failure")
                 failure_el.set(
@@ -167,6 +191,11 @@ class JUnitXMLExporter(BaseExporter):
                 out_lines.append(f"judge_score: {judge_score.score}")
                 out_lines.append(
                     f"judge_explanation: {_truncate(judge_score.explanation, 500)}"
+                )
+            if has_checks:
+                passed_count = len(eval_result.check_results) - len(failed_checks)
+                out_lines.append(
+                    f"checks: {passed_count}/{len(eval_result.check_results)} passed"
                 )
             system_out.text = "\n".join(out_lines)
 

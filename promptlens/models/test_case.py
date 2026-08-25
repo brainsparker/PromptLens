@@ -4,6 +4,7 @@ from typing import Any, Dict, List, Optional
 
 from pydantic import BaseModel, ConfigDict, Field
 
+from promptlens.models.checks import Check
 from promptlens.models.tools import ToolDefinition, ExpectedToolCall
 
 
@@ -18,6 +19,7 @@ class TestCase(BaseModel):
         tags: List of tags for filtering and organization
         metadata: Additional arbitrary metadata
         reference_answer: Optional reference answer for comparison
+        checks: Deterministic checks run locally against the response
         tools: Tools/functions available to the LLM for this test case
         expected_tool_calls: Expected tool calls the LLM should make
         evaluation_mode: Evaluation mode (standard/tool_only/tool_and_answer)
@@ -31,6 +33,15 @@ class TestCase(BaseModel):
     tags: List[str] = Field(default_factory=list)
     metadata: Dict[str, Any] = Field(default_factory=dict)
     reference_answer: Optional[str] = None
+
+    # Deterministic checks (optional, for backward compatibility)
+    checks: List[Check] = Field(
+        default_factory=list,
+        description=(
+            "Deterministic checks run locally against the response: "
+            "contains, not_contains, regex, exact_match, json_valid, json_schema"
+        )
+    )
 
     # Tool calling evaluation fields (optional, for backward compatibility)
     tools: List[ToolDefinition] = Field(

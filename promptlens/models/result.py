@@ -5,6 +5,7 @@ from typing import Any, Dict, List, Optional
 
 from pydantic import BaseModel, Field
 
+from promptlens.models.checks import CheckResult
 from promptlens.models.tools import ToolCall, ToolCallEvaluation
 
 
@@ -94,6 +95,7 @@ class EvaluationResult(BaseModel):
         expected_behavior: What was expected
         model_response: The model's response with metadata
         judge_score: Score from the judge (if judging was performed)
+        check_results: Outcomes of the test case's deterministic checks
         timestamp: When the evaluation was performed
     """
 
@@ -102,7 +104,28 @@ class EvaluationResult(BaseModel):
     expected_behavior: str
     model_response: ModelResponse
     judge_score: Optional[JudgeScore] = None
+    check_results: List[CheckResult] = Field(
+        default_factory=list,
+        description="Outcomes of the deterministic checks declared on the test case"
+    )
     timestamp: datetime = Field(default_factory=datetime.utcnow)
+
+    @property
+    def checks_passed(self) -> Optional[bool]:
+        """Whether all deterministic checks passed.
+
+        Returns:
+            True if all checks passed, False if any failed,
+            None if the test case declared no checks.
+        """
+        if not self.check_results:
+            return None
+        return all(c.passed for c in self.check_results)
+
+    @property
+    def failed_checks(self) -> List[CheckResult]:
+        """Return the check results that failed."""
+        return [c for c in self.check_results if not c.passed]
 
 
 class RunResult(BaseModel):
@@ -145,6 +168,46 @@ class RunResult(BaseModel):
 
         scores = [r.judge_score.score for r in filtered_results if r.judge_score]
         return sum(scores) / len(scores) if scores else None
+
+    def get_check_stats(self, model: Optional[str] = None) -> Dict[str, int]:
+        """Aggregate deterministic check outcomes.
+
+        Args:
+            model: Optional model name to filter by
+
+        Returns:
+            Dict with keys: cases_with_checks, cases_passed, cases_failed,
+            checks_total, checks_failed
+        """
+        filtered_results = self.results
+        if model:
+            filtered_results = [r for r in self.results if r.model_response.model == model]
+
+        cases_with_checks = 0
+        cases_passed = 0
+        cases_failed = 0
+        checks_total = 0
+        checks_failed = 0
+
+        for r in filtered_results:
+            if not r.check_results:
+                continue
+            cases_with_checks += 1
+            checks_total += len(r.check_results)
+            failed = len(r.failed_checks)
+            checks_failed += failed
+            if failed:
+                cases_failed += 1
+            else:
+                cases_passed += 1
+
+        return {
+            "cases_with_checks": cases_with_checks,
+            "cases_passed": cases_passed,
+            "cases_failed": cases_failed,
+            "checks_total": checks_total,
+            "checks_failed": checks_failed,
+        }
 
     def get_total_cost(self, model: Optional[str] = None) -> float:
         """Calculate total cost for a specific model or all models.
