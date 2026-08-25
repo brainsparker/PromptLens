@@ -86,6 +86,9 @@ class JudgeConfig(BaseModel):
     """Configuration for the judge.
 
     Attributes:
+        enabled: Whether LLM-as-judge scoring runs at all. Disable for
+            checks-only runs that need no judge API key and gate CI purely
+            on deterministic checks
         provider: Provider for judge model
         model: Model to use for judging
         temperature: Sampling temperature
@@ -93,6 +96,7 @@ class JudgeConfig(BaseModel):
         criteria: List of criteria to evaluate
     """
 
+    enabled: bool = True
     provider: str = "anthropic"
     model: str = "claude-3-5-sonnet-20241022"
     temperature: float = 0.3
@@ -160,7 +164,7 @@ class OutputConfig(BaseModel):
     @field_validator("formats")
     @classmethod
     def validate_formats(cls, value: List[str]) -> List[str]:
-        allowed = {"html", "json", "csv", "md"}
+        allowed = {"html", "json", "csv", "md", "junit"}
         normalized = [fmt.lower() for fmt in value]
         invalid = sorted({fmt for fmt in normalized if fmt not in allowed})
         if invalid:

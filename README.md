@@ -18,10 +18,11 @@ PromptLens runs golden test sets against multiple models, scores outputs using L
 - **Multi-Provider Support** - Test Anthropic (Claude), OpenAI (GPT), Google (Gemini), You.com, and local models (Ollama, LM Studio)
 - **Tool/Function Calling Evaluation** - Test tool usage with automatic + LLM judge scoring across 5 criteria
 - **LLM-as-Judge Scoring** - Automated evaluation using another LLM with configurable criteria
+- **Deterministic Checks** - Local, zero-cost assertions (contains, regex, exact match, JSON schema) with reproducible verdicts you can safely gate CI on, no judge API key required
 - **Cost & Latency Tracking** - Monitor per-query costs and response times across models
 - **Beautiful Reports** - Interactive HTML reports with charts, comparisons, and detailed results
 - **Multiple Export Formats** - HTML, JSON, CSV, Markdown, and JUnit XML outputs
-- **CI-Native Quality Gates** - JUnit XML reports plus a `--fail-under` score gate that fails the build on quality regressions
+- **CI-Native Quality Gates** - JUnit XML reports plus `--fail-under` (judge score) and `--fail-on-checks` (deterministic) gates that fail the build on quality regressions
 - **Cross-Run Comparison** - Diff any two runs by test case and model with score, cost, and latency deltas, plus a `--fail-on-regression` CI gate
 - **Parallel Execution** - Async execution with configurable concurrency and retry logic
 - **Portable & Local** - No cloud backend, all data stays on your machine
@@ -114,6 +115,54 @@ test_cases:
 ```
 
 Save as `my_tests.yaml`.
+
+### Adding Deterministic Checks
+
+When an expectation is mechanically verifiable, declare it as a check instead of (or alongside) judge scoring. Checks run locally against the response: no API call, no cost, and the same verdict every time.
+
+```yaml
+test_cases:
+  - id: "extract-001"
+    query: 'Extract name and age as JSON from: "Ada Lovelace, 36"'
+    expected_behavior: "Return valid JSON with name and age"
+    checks:
+      - type: json_schema
+        json_schema:
+          type: object
+          required: ["name", "age"]
+          properties:
+            name: { type: string }
+            age: { type: integer }
+      - type: contains
+        value: "Ada Lovelace"
+        case_sensitive: true
+      - type: not_contains
+        value: ["I cannot", "as an AI"]
+      - type: regex
+        pattern: "\\d+"
+```
+
+Supported check types:
+
+| Type | Passes when |
+|------|-------------|
+| `contains` | Response contains the substring(s). Lists support `mode: all` (default) or `mode: any` |
+| `not_contains` | Response contains none of the given substring(s) |
+| `regex` | The pattern matches somewhere in the response |
+| `exact_match` | Response equals the value (whitespace-stripped, case-insensitive by default) |
+| `json_valid` | Response parses as JSON (raw or inside a ` ```json ` fence) |
+| `json_schema` | Response JSON conforms to a minimal schema (supports `type`, `required`, `properties`, `items`, `enum`) |
+
+String comparisons are case-insensitive unless `case_sensitive: true` is set. Check outcomes appear in the console summary, JSON/CSV exports, and the JUnit report, where a failed check marks the test case as a failure.
+
+For a checks-only run that needs no judge API key at all, disable the judge in your config:
+
+```yaml
+judge:
+  enabled: false
+```
+
+See `examples/golden_sets/structured_output.yaml` and `examples/configs/checks_only.yaml` for a complete example.
 
 ### Creating a Configuration File
 
@@ -326,15 +375,18 @@ output:
 
 PromptLens speaks the language your CI system already understands: JUnit XML test reports and exit codes.
 
-Add `junit` to your output formats, then gate the build on judge scores:
+Add `junit` to your output formats, then gate the build on judge scores, deterministic checks, or both:
 
 ```bash
-promptlens run config.yaml --fail-under 3.5
+promptlens run config.yaml --fail-under 3.5 --fail-on-checks
 ```
 
 - Each golden-set test case becomes a JUnit test case (one test suite per model).
-- A test case scoring below the threshold is reported as a failure, a model API error as an error, and an unjudged case as skipped.
+- A test case with a failed deterministic check is reported as a failure (type `CheckFailure`), a test case scoring below the threshold as a failure, a model API error as an error, and a case with neither a judge score nor checks as skipped. A case whose checks all passed counts as a pass even without a judge score.
+- If any deterministic check fails, `--fail-on-checks` exits with code 2. Because checks are local and reproducible, this gate is safe to block merges on, unlike judge scores, which vary run to run.
 - If any model's average judge score falls below `--fail-under`, the command exits with code 2, failing the pipeline. Exit code 1 is reserved for run errors, so CI can tell quality regressions apart from infrastructure failures.
+
+To gate CI purely on checks with no judge API key in the pipeline, set `judge.enabled: false` in the config and use `--fail-on-checks` alone.
 
 Example GitHub Actions step:
 

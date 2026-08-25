@@ -1,0 +1,60 @@
+name: "Structured Output Checks"
+description: >
+  Deterministic checks example: validates structured JSON output, required
+  phrasing, and forbidden content without any LLM judge. Safe to gate CI on
+  because every check runs locally with a reproducible verdict.
+version: "1.0"
+
+test_cases:
+  - id: "so-001"
+    query: >
+      Extract the following into JSON with keys "name" (string), "age"
+      (integer), and "city" (string): "Ada Lovelace, 36, London". Respond
+      with only the JSON object.
+    expected_behavior: "Return a valid JSON object with name, age, and city fields"
+    category: "extraction"
+    tags: ["json", "extraction"]
+    checks:
+      - type: json_schema
+        json_schema:
+          type: object
+          required: ["name", "age", "city"]
+          properties:
+            name:
+              type: string
+            age:
+              type: integer
+            city:
+              type: string
+      - type: contains
+        value: "Ada Lovelace"
+        case_sensitive: true
+
+  - id: "so-002"
+    query: "Classify the sentiment of this review as positive, negative, or neutral. Respond with a single word. Review: 'This product exceeded all my expectations!'"
+    expected_behavior: "Classify as positive with a single-word answer"
+    category: "classification"
+    tags: ["classification", "sentiment"]
+    checks:
+      - type: exact_match
+        value: "positive"
+
+  - id: "so-003"
+    query: "List three benefits of unit testing. Do not mention any specific programming language."
+    expected_behavior: "List exactly three benefits without naming a specific language"
+    category: "constrained_generation"
+    tags: ["constraints"]
+    checks:
+      - type: not_contains
+        value: ["Python", "JavaScript", "Java "]
+      - type: regex
+        pattern: "(?s)(1\\.|-).*?(2\\.|-).*?(3\\.|-)"
+
+  - id: "so-004"
+    query: "Generate a fictional order confirmation with an order ID in the format ORD-XXXXX where X is a digit."
+    expected_behavior: "Include an order ID matching the ORD-XXXXX format"
+    category: "formatting"
+    tags: ["formatting", "regex"]
+    checks:
+      - type: regex
+        pattern: "ORD-\\d{5}"

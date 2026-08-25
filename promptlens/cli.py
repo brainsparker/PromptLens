@@ -74,6 +74,18 @@ def _check_fail_under(result: "RunResult", fail_under: float) -> list:
     return failing
 
 
+def _collect_check_failures(result: "RunResult") -> list:
+    """Return evaluation results with at least one failed deterministic check.
+
+    Args:
+        result: The completed run result
+
+    Returns:
+        List of EvaluationResult objects whose checks_passed is False
+    """
+    return [r for r in result.results if r.checks_passed is False]
+
+
 def setup_logging(level: str = "INFO") -> None:
     """Set up logging configuration.
 
@@ -130,12 +142,22 @@ def cli(log_level: str) -> None:
         "failure threshold used by the junit export format."
     ),
 )
+@click.option(
+    "--fail-on-checks",
+    is_flag=True,
+    help=(
+        "Quality gate for CI: exit with code 2 if any deterministic check "
+        "fails. Checks run locally with no API cost, so this gate is "
+        "reproducible and safe to block merges on."
+    ),
+)
 def run(
     config: str,
     golden_set: Optional[str],
     output_dir: Optional[str],
     dry_run: bool,
     fail_under: Optional[float],
+    fail_on_checks: bool,
 ) -> None:
     """Run evaluation with the given configuration file.
 
@@ -146,6 +168,7 @@ def run(
         promptlens run config.yaml --output-dir ./results
         promptlens run config.yaml --dry-run
         promptlens run config.yaml --fail-under 3.5
+        promptlens run config.yaml --fail-on-checks
     """
     try:
         # Load config
@@ -219,6 +242,26 @@ def run(
             html_path = run_output_dir / "report.html"
             console.print(f"\n[cyan]View report: file://{html_path.absolute()}[/cyan]")
 
+        # Deterministic check gate for CI
+        if fail_on_checks:
+            failing_results = _collect_check_failures(result)
+            if failing_results:
+                console.print(
+                    f"\n[bold red]✗ Check gate failed (--fail-on-checks): "
+                    f"{len(failing_results)} result(s) with failing checks[/bold red]"
+                )
+                for eval_result in failing_results:
+                    model = eval_result.model_response.model
+                    for check_result in eval_result.failed_checks:
+                        console.print(
+                            f"  {eval_result.test_case_id} [{model}] "
+                            f"{check_result.description}: {check_result.detail}"
+                        )
+                sys.exit(2)
+            console.print(
+                "\n[bold green]✓ Check gate passed (--fail-on-checks)[/bold green]"
+            )
+
         # Quality gate for CI
         if fail_under is not None:
             failing_models = _check_fail_under(result, fail_under)
@@ -267,10 +310,19 @@ def validate(golden_set: str) -> None:
         if golden_set_obj.description:
             console.print(f"  Description: {golden_set_obj.description}")
 
+        total_checks = sum(len(tc.checks) for tc in golden_set_obj.test_cases)
+        if total_checks:
+            cases_with_checks = sum(1 for tc in golden_set_obj.test_cases if tc.checks)
+            console.print(
+                f"  Deterministic Checks: {total_checks} "
+                f"across {cases_with_checks} test case(s)"
+            )
+
         # Show test case IDs
         console.print(f"\n  Test Case IDs:")
         for tc in golden_set_obj.test_cases:
-            console.print(f"    - {tc.id}")
+            suffix = f" ({len(tc.checks)} checks)" if tc.checks else ""
+            console.print(f"    - {tc.id}{suffix}")
 
     except Exception as e:
         console.print(f"[red]Validation failed: {e}[/red]")

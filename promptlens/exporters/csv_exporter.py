@@ -65,6 +65,16 @@ class CSVExporter(BaseExporter):
                     if eval_result.judge_score
                     else ""
                 ),
+                "checks_total": len(eval_result.check_results),
+                "checks_failed": len(eval_result.failed_checks),
+                "checks_passed": (
+                    "" if eval_result.checks_passed is None
+                    else str(eval_result.checks_passed).lower()
+                ),
+                "failed_check_details": "; ".join(
+                    f"{c.description}: {c.detail}"
+                    for c in eval_result.failed_checks
+                )[:300],
                 "latency_ms": eval_result.model_response.latency_ms,
                 "cost_usd": eval_result.model_response.cost_usd or 0.0,
                 "tokens_used": eval_result.model_response.tokens_used or 0,

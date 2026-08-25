@@ -16,6 +16,7 @@ from rich.progress import (
     TimeElapsedColumn,
 )
 
+from promptlens.checks import run_checks
 from promptlens.judges.llm_judge import LLMJudge
 from promptlens.loaders.yaml_loader import get_loader
 from promptlens.models.config import RunConfig
@@ -44,8 +45,12 @@ class Runner:
         self.config = config
         self.run_id = str(uuid.uuid4())[:8]
 
-        # Initialize judge
-        self.judge = LLMJudge(config.judge)
+        # Initialize judge (optional: checks-only runs need no judge key)
+        self.judge: Optional[LLMJudge] = None
+        if config.judge.enabled:
+            self.judge = LLMJudge(config.judge)
+        else:
+            logger.info("LLM judge disabled; running deterministic checks only")
 
         # Initialize providers for each model
         self.providers: List[BaseProvider] = []
@@ -215,9 +220,14 @@ class Runner:
                 timeout_seconds=self.config.execution.timeout_seconds,
             )
 
-            # Judge the response (only if generation succeeded)
+            # Run deterministic checks (local, free, only if generation succeeded)
+            check_results = []
+            if test_case.checks and not model_response.error:
+                check_results = run_checks(test_case.checks, model_response.content)
+
+            # Judge the response (only if judging is enabled and generation succeeded)
             judge_score = None
-            if not model_response.error:
+            if self.judge is not None and not model_response.error:
                 try:
                     judge_score = await self.judge.evaluate(test_case, model_response)
                 except Exception as e:
@@ -232,6 +242,7 @@ class Runner:
                 expected_behavior=test_case.expected_behavior,
                 model_response=model_response,
                 judge_score=judge_score,
+                check_results=check_results,
                 timestamp=datetime.utcnow(),
             )
 
@@ -252,6 +263,15 @@ class Runner:
             console.print(f"[bold]{model}[/bold]")
             if avg_score is not None:
                 console.print(f"  Average Score: {avg_score:.2f}/5.0")
+            check_stats = result.get_check_stats(model)
+            if check_stats["cases_with_checks"]:
+                color = "green" if check_stats["cases_failed"] == 0 else "red"
+                console.print(
+                    f"  Checks: [{color}]{check_stats['cases_passed']}/"
+                    f"{check_stats['cases_with_checks']} cases passed[/{color}] "
+                    f"({check_stats['checks_failed']} of "
+                    f"{check_stats['checks_total']} checks failed)"
+                )
             console.print(f"  Total Cost: ${total_cost:.4f}")
             console.print(f"  Total Time: {total_latency:.0f}ms")
             console.print()
