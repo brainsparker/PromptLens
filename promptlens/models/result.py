@@ -61,6 +61,11 @@ class JudgeScore(BaseModel):
         tool_evaluations: Detailed evaluation of each tool call (if applicable)
         tool_usage_score: Overall score for tool usage correctness (1-5)
         tool_efficiency_score: Score for tool usage efficiency (1-5)
+        sample_scores: Raw scores from each judge sample (populated when
+            multi-sample judging is enabled)
+        score_mean: Mean of the judge sample scores
+        score_stdev: Sample standard deviation of the judge sample scores
+            (0.0 when only one sample was taken)
     """
 
     score: int = Field(..., ge=1, le=5)  # Must be 1-5
@@ -69,6 +74,20 @@ class JudgeScore(BaseModel):
     judge_model: str
     judge_provider: str
     timestamp: datetime = Field(default_factory=datetime.utcnow)
+
+    # Judge stability fields (optional, for backward compatibility)
+    sample_scores: List[int] = Field(
+        default_factory=list,
+        description="Raw scores from each judge sample"
+    )
+    score_mean: Optional[float] = Field(
+        None,
+        description="Mean of the judge sample scores"
+    )
+    score_stdev: Optional[float] = Field(
+        None,
+        description="Sample standard deviation of the judge sample scores"
+    )
 
     # Tool evaluation fields (optional, for backward compatibility)
     tool_evaluations: List[ToolCallEvaluation] = Field(
@@ -145,6 +164,30 @@ class RunResult(BaseModel):
 
         scores = [r.judge_score.score for r in filtered_results if r.judge_score]
         return sum(scores) / len(scores) if scores else None
+
+    def get_average_judge_stdev(self, model: Optional[str] = None) -> Optional[float]:
+        """Calculate the average per-case judge score stdev for a model.
+
+        Only meaningful when multi-sample judging was enabled for the run;
+        returns None when no judge score carries stability metadata.
+
+        Args:
+            model: Optional model name to filter by
+
+        Returns:
+            Average per-case sample standard deviation, or None if no
+            stability data is available
+        """
+        filtered_results = self.results
+        if model:
+            filtered_results = [r for r in self.results if r.model_response.model == model]
+
+        stdevs = [
+            r.judge_score.score_stdev
+            for r in filtered_results
+            if r.judge_score is not None and r.judge_score.score_stdev is not None
+        ]
+        return sum(stdevs) / len(stdevs) if stdevs else None
 
     def get_total_cost(self, model: Optional[str] = None) -> float:
         """Calculate total cost for a specific model or all models.

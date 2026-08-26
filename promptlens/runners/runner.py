@@ -17,6 +17,7 @@ from rich.progress import (
 )
 
 from promptlens.judges.llm_judge import LLMJudge
+from promptlens.judges.stability import UNSTABLE_STDEV_THRESHOLD, sample_judge_scores
 from promptlens.loaders.yaml_loader import get_loader
 from promptlens.models.config import RunConfig
 from promptlens.models.result import EvaluationResult, RunResult
@@ -219,7 +220,12 @@ class Runner:
             judge_score = None
             if not model_response.error:
                 try:
-                    judge_score = await self.judge.evaluate(test_case, model_response)
+                    judge_score = await sample_judge_scores(
+                        judge=self.judge,
+                        test_case=test_case,
+                        model_response=model_response,
+                        samples=self.config.judge.samples,
+                    )
                 except Exception as e:
                     logger.error(f"Judge evaluation failed: {e}")
 
@@ -252,6 +258,24 @@ class Runner:
             console.print(f"[bold]{model}[/bold]")
             if avg_score is not None:
                 console.print(f"  Average Score: {avg_score:.2f}/5.0")
+            if self.config.judge.samples > 1:
+                avg_stdev = result.get_average_judge_stdev(model)
+                if avg_stdev is not None:
+                    unstable = sum(
+                        1
+                        for r in result.results
+                        if r.model_response.model == model
+                        and r.judge_score is not None
+                        and r.judge_score.score_stdev is not None
+                        and r.judge_score.score_stdev >= UNSTABLE_STDEV_THRESHOLD
+                    )
+                    stability_line = (
+                        f"  Judge Stability: ±{avg_stdev:.2f} avg stdev "
+                        f"({self.config.judge.samples} samples/case)"
+                    )
+                    if unstable:
+                        stability_line += f", {unstable} unstable case(s)"
+                    console.print(stability_line)
             console.print(f"  Total Cost: ${total_cost:.4f}")
             console.print(f"  Total Time: {total_latency:.0f}ms")
             console.print()

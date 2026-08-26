@@ -91,6 +91,11 @@ class JudgeConfig(BaseModel):
         temperature: Sampling temperature
         custom_prompt: Optional custom judge prompt template
         criteria: List of criteria to evaluate
+        samples: Number of independent judge evaluations per response.
+            Values above 1 enable multi-sample judging: the judge runs
+            multiple times, and the reported score is the median with mean
+            and stdev attached as stability metadata. Each extra sample adds
+            one judge API call per test case per model.
     """
 
     provider: str = "anthropic"
@@ -98,6 +103,14 @@ class JudgeConfig(BaseModel):
     temperature: float = 0.3
     custom_prompt: Optional[str] = None
     criteria: List[str] = Field(default_factory=lambda: ["accuracy", "helpfulness"])
+    samples: int = 1
+
+    @field_validator("samples")
+    @classmethod
+    def validate_samples(cls, value: int) -> int:
+        if not (1 <= value <= 10):
+            raise ValueError("samples must be between 1 and 10")
+        return value
 
 
 class ExecutionConfig(BaseModel):
