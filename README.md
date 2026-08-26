@@ -18,6 +18,7 @@ PromptLens runs golden test sets against multiple models, scores outputs using L
 - **Multi-Provider Support** - Test Anthropic (Claude), OpenAI (GPT), Google (Gemini), You.com, and local models (Ollama, LM Studio)
 - **Tool/Function Calling Evaluation** - Test tool usage with automatic + LLM judge scoring across 5 criteria
 - **LLM-as-Judge Scoring** - Automated evaluation using another LLM with configurable criteria
+- **Judge Stability** - Multi-sample judging with median aggregation, per-case variance reporting, and a noise-aware CI gate that stops judge flakiness from failing builds
 - **Cost & Latency Tracking** - Monitor per-query costs and response times across models
 - **Beautiful Reports** - Interactive HTML reports with charts, comparisons, and detailed results
 - **Multiple Export Formats** - HTML, JSON, CSV, Markdown, and JUnit XML outputs
@@ -350,6 +351,48 @@ Example GitHub Actions step:
 ```
 
 The same `junit.xml` works with GitLab (`artifacts:reports:junit`), Jenkins, CircleCI, and any other JUnit-compatible report viewer.
+
+---
+
+## Judge Stability (Multi-Sample Judging)
+
+LLM-as-judge scores are noisy: the same judge model, prompt, and response can score 4 on Tuesday and 3 on Wednesday, even at low temperature. On a single sample, that noise is indistinguishable from a real quality change, which is how CI gates start flapping and teams stop trusting red builds.
+
+PromptLens can run the judge multiple times per response and aggregate the samples:
+
+```bash
+promptlens run config.yaml --judge-samples 3
+```
+
+Or in the config:
+
+```yaml
+judge:
+  provider: anthropic
+  model: claude-3-5-sonnet-20241022
+  samples: 3
+```
+
+With multi-sample judging enabled:
+
+- The reported score is the **median** of the samples, which is robust to a single outlier.
+- Each judge score carries `sample_scores`, `score_mean`, and `score_stdev` in the JSON export, so tooling can reason about confidence instead of trusting a point estimate.
+- The run summary reports each model's average judge stdev and flags unstable cases (stdev of 1.0 or more, meaning samples disagreed by a full point).
+- Failed samples are dropped as long as at least one succeeds, so a transient judge API error does not sink the case.
+
+Each extra sample adds one judge API call per test case per model, so a 3-sample run triples judge cost. Judges are cheap relative to shipping a regression; 3 samples is a good default for CI.
+
+### Noise-Aware Quality Gate
+
+Combine multi-sample judging with `--noise-aware-gate` to stop judge noise from failing builds:
+
+```bash
+promptlens run config.yaml --judge-samples 3 --fail-under 3.5 --noise-aware-gate
+```
+
+Each model's gate threshold is lowered by its average per-case judge stdev: a model fails only when its average score drops below `--fail-under` by more than the observed judge noise. A drop from 3.6 to 3.45 with a measured noise of 0.2 passes; a drop to 3.1 still fails. The gate output prints the effective threshold and noise margin for every failing model, so the decision is auditable in the CI log.
+
+`--noise-aware-gate` requires `--fail-under`. Without multi-sample data the margin is zero and the gate behaves exactly like the absolute gate.
 
 ---
 

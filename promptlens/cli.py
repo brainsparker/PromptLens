@@ -66,11 +66,46 @@ def _check_fail_under(result: "RunResult", fail_under: float) -> list:
     Returns:
         List of (model, average_score_or_None) tuples that fail the gate
     """
+    return [
+        (model, avg)
+        for model, avg, _ in _gate_failures(result, fail_under, noise_aware=False)
+    ]
+
+
+def _gate_failures(
+    result: "RunResult", fail_under: float, noise_aware: bool = False
+) -> list:
+    """Return models failing the quality gate, with the noise margin applied.
+
+    In noise-aware mode, each model's effective threshold is lowered by its
+    average per-case judge score stdev (available when multi-sample judging
+    is enabled). This stops single-sample judge noise from flapping CI
+    builds: a model fails only when its average score drops below
+    fail_under minus the observed judge noise.
+
+    A model with no judge scores at all always fails the gate, since the
+    gate cannot be evaluated without scores and a silent pass would be
+    misleading.
+
+    Args:
+        result: The completed run result
+        fail_under: Minimum acceptable average judge score (1-5 scale)
+        noise_aware: Whether to subtract the judge noise margin from the gate
+
+    Returns:
+        List of (model, average_score_or_None, noise_margin) tuples that
+        fail the gate
+    """
     failing = []
     for model in result.models_tested:
         avg = result.get_average_score(model)
-        if avg is None or avg < fail_under:
-            failing.append((model, avg))
+        margin = 0.0
+        if noise_aware:
+            stdev = result.get_average_judge_stdev(model)
+            if stdev is not None:
+                margin = stdev
+        if avg is None or avg < fail_under - margin:
+            failing.append((model, avg, margin))
     return failing
 
 
@@ -130,12 +165,37 @@ def cli(log_level: str) -> None:
         "failure threshold used by the junit export format."
     ),
 )
+@click.option(
+    "--judge-samples",
+    type=click.IntRange(1, 10),
+    default=None,
+    help=(
+        "Number of independent judge evaluations per response (overrides "
+        "judge.samples in the config). Values above 1 enable multi-sample "
+        "judging: the reported score is the median across samples, with "
+        "mean and stdev attached as stability metadata. Each extra sample "
+        "adds one judge API call per test case per model."
+    ),
+)
+@click.option(
+    "--noise-aware-gate",
+    is_flag=True,
+    help=(
+        "Make --fail-under noise-aware: each model's gate threshold is "
+        "lowered by its average per-case judge score stdev, so a model "
+        "fails only when its score drops below the gate by more than the "
+        "observed judge noise. Requires --fail-under; most useful with "
+        "--judge-samples 3 or higher."
+    ),
+)
 def run(
     config: str,
     golden_set: Optional[str],
     output_dir: Optional[str],
     dry_run: bool,
     fail_under: Optional[float],
+    judge_samples: Optional[int],
+    noise_aware_gate: bool,
 ) -> None:
     """Run evaluation with the given configuration file.
 
@@ -146,7 +206,14 @@ def run(
         promptlens run config.yaml --output-dir ./results
         promptlens run config.yaml --dry-run
         promptlens run config.yaml --fail-under 3.5
+        promptlens run config.yaml --judge-samples 3 --fail-under 3.5 --noise-aware-gate
     """
+    if noise_aware_gate and fail_under is None:
+        console.print(
+            "[red]--noise-aware-gate requires --fail-under to be set[/red]"
+        )
+        sys.exit(1)
+
     try:
         # Load config
         console.print(f"\n[cyan]Loading configuration from {config}...[/cyan]")
@@ -158,6 +225,14 @@ def run(
         if output_dir:
             config_data.setdefault("output", {})
             config_data["output"]["directory"] = output_dir
+        if judge_samples is not None:
+            judge_section = config_data.setdefault("judge", {})
+            if not isinstance(judge_section, dict):
+                console.print(
+                    "[red]Invalid configuration: judge section must be a mapping[/red]"
+                )
+                sys.exit(1)
+            judge_section["samples"] = judge_samples
 
         # Parse config
         try:
@@ -221,17 +296,28 @@ def run(
 
         # Quality gate for CI
         if fail_under is not None:
-            failing_models = _check_fail_under(result, fail_under)
+            gate_label = f"--fail-under {fail_under:g}"
+            if noise_aware_gate:
+                gate_label += ", noise-aware"
+            failing_models = _gate_failures(
+                result, fail_under, noise_aware=noise_aware_gate
+            )
             if failing_models:
                 console.print(
-                    f"\n[bold red]✗ Quality gate failed (--fail-under {fail_under:g}):[/bold red]"
+                    f"\n[bold red]✗ Quality gate failed ({gate_label}):[/bold red]"
                 )
-                for model, avg in failing_models:
+                for model, avg, margin in failing_models:
                     avg_display = f"{avg:.2f}" if avg is not None else "no scores"
-                    console.print(f"  {model}: average judge score {avg_display}")
+                    line = f"  {model}: average judge score {avg_display}"
+                    if noise_aware_gate:
+                        line += (
+                            f" (effective threshold {fail_under - margin:.2f}"
+                            f" = {fail_under:g} - {margin:.2f} noise margin)"
+                        )
+                    console.print(line)
                 sys.exit(2)
             console.print(
-                f"\n[bold green]✓ Quality gate passed (--fail-under {fail_under:g})[/bold green]"
+                f"\n[bold green]✓ Quality gate passed ({gate_label})[/bold green]"
             )
 
     except Exception as e:
