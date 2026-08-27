@@ -20,6 +20,7 @@ from promptlens.exporters.html_exporter import HTMLExporter
 from promptlens.exporters.json_exporter import JSONExporter
 from promptlens.exporters.junit_exporter import JUnitXMLExporter
 from promptlens.exporters.markdown_exporter import MarkdownExporter
+from promptlens.exporters.otel_exporter import OTelExporter
 from promptlens.models.config import RunConfig
 from promptlens.models.result import RunResult
 from promptlens.runners.runner import Runner
@@ -130,12 +131,23 @@ def cli(log_level: str) -> None:
         "failure threshold used by the junit export format."
     ),
 )
+@click.option(
+    "--otel-endpoint",
+    type=str,
+    default=None,
+    help=(
+        "OTLP/HTTP endpoint (e.g. http://localhost:4318) to push traces to "
+        "when the otel export format is enabled. Defaults to the "
+        "OTEL_EXPORTER_OTLP_ENDPOINT environment variable."
+    ),
+)
 def run(
     config: str,
     golden_set: Optional[str],
     output_dir: Optional[str],
     dry_run: bool,
     fail_under: Optional[float],
+    otel_endpoint: Optional[str],
 ) -> None:
     """Run evaluation with the given configuration file.
 
@@ -192,6 +204,10 @@ def run(
             "md": (MarkdownExporter(), "results.md"),
             "html": (HTMLExporter(), "report.html"),
             "junit": (JUnitXMLExporter(fail_under=fail_under), "junit.xml"),
+            "otel": (
+                OTelExporter(fail_under=fail_under, endpoint=otel_endpoint),
+                "traces.otlp.json",
+            ),
         }
 
         exported_files = []
@@ -517,7 +533,7 @@ def compare(
 @click.option(
     "--format",
     "export_format",
-    type=click.Choice(["json", "csv", "md", "html", "junit"], case_sensitive=False),
+    type=click.Choice(["json", "csv", "md", "html", "junit", "otel"], case_sensitive=False),
     required=True,
     help="Export format",
 )
@@ -568,6 +584,7 @@ def export(run_id: str, export_format: str, output: Optional[str], output_dir: s
                 "md": ".md",
                 "html": ".html",
                 "junit": ".xml",
+                "otel": ".json",
             }
             output = f"export_{run_id}{extensions[export_format]}"
 
@@ -578,6 +595,7 @@ def export(run_id: str, export_format: str, output: Optional[str], output_dir: s
             "md": MarkdownExporter(),
             "html": HTMLExporter(),
             "junit": JUnitXMLExporter(),
+            "otel": OTelExporter(),
         }
 
         exporter = exporters[export_format]
