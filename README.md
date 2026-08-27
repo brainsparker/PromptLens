@@ -20,8 +20,9 @@ PromptLens runs golden test sets against multiple models, scores outputs using L
 - **LLM-as-Judge Scoring** - Automated evaluation using another LLM with configurable criteria
 - **Cost & Latency Tracking** - Monitor per-query costs and response times across models
 - **Beautiful Reports** - Interactive HTML reports with charts, comparisons, and detailed results
-- **Multiple Export Formats** - HTML, JSON, CSV, Markdown, and JUnit XML outputs
+- **Multiple Export Formats** - HTML, JSON, CSV, Markdown, JUnit XML, and OpenTelemetry (OTLP) outputs
 - **CI-Native Quality Gates** - JUnit XML reports plus a `--fail-under` score gate that fails the build on quality regressions
+- **Observability-Native** - Export eval runs as OpenTelemetry traces following the GenAI semantic conventions, viewable in Grafana, Jaeger, Datadog, or any OTLP backend
 - **Cross-Run Comparison** - Diff any two runs by test case and model with score, cost, and latency deltas, plus a `--fail-on-regression` CI gate
 - **Parallel Execution** - Async execution with configurable concurrency and retry logic
 - **Portable & Local** - No cloud backend, all data stays on your machine
@@ -317,6 +318,7 @@ output:
     - csv                           # Flattened spreadsheet
     - md                            # Markdown summary
     - junit                         # JUnit XML for CI test reporting
+    - otel                          # OpenTelemetry OTLP/JSON traces
   run_name: "My Evaluation"         # Display name
 ```
 
@@ -350,6 +352,34 @@ Example GitHub Actions step:
 ```
 
 The same `junit.xml` works with GitLab (`artifacts:reports:junit`), Jenkins, CircleCI, and any other JUnit-compatible report viewer.
+
+---
+
+## Observability Integration (OpenTelemetry)
+
+Eval results are most useful next to the traces they explain. The `otel` export format writes each run as an OpenTelemetry trace following the [GenAI semantic conventions](https://github.com/open-telemetry/semantic-conventions), so eval scores land in the same backend as your production telemetry (Grafana Tempo, Jaeger, Datadog, Honeycomb, AWS, or any OTLP-compatible collector).
+
+Add `otel` to your output formats, then optionally point the run at a collector:
+
+```bash
+# Write traces.otlp.json alongside the other reports
+promptlens run config.yaml
+
+# Also push the trace to a local OTLP/HTTP collector
+promptlens run config.yaml --otel-endpoint http://localhost:4318
+
+# Or use the standard environment variable
+export OTEL_EXPORTER_OTLP_ENDPOINT=http://localhost:4318
+promptlens run config.yaml
+```
+
+How runs are mapped:
+
+- The run is a root span; each evaluated test case is a child `chat <model>` span with `gen_ai.*` attributes (provider, model, token usage, finish reasons).
+- Every judge verdict becomes a `gen_ai.evaluation.result` span event carrying `gen_ai.evaluation.name`, `gen_ai.evaluation.score.value`, a pass/fail `gen_ai.evaluation.score.label` (using the `--fail-under` threshold), and the judge's explanation. Per-criteria sub-scores and tool usage scores are emitted as additional events.
+- Provider errors set span status `ERROR` with an `error.type` attribute.
+
+The exporter is dependency-free (no OTel SDK required), always writes `traces.otlp.json` to the run's output directory, and treats a failed push as a warning so a down collector never breaks CI. The GenAI semantic conventions are still marked Development upstream; attribute names track the spec as of August 2026.
 
 ---
 
@@ -657,6 +687,7 @@ class RuleBasedJudge(BaseJudge):
 - [x] JUnit XML export and `--fail-under` CI quality gate
 - [x] Parallel execution with retry logic
 - [x] Cross-run comparison with `--fail-on-regression` CI gate
+- [x] OpenTelemetry (OTLP) export following the GenAI semantic conventions
 - [ ] Multi-judge consensus scoring
 - [ ] Synthetic test case generation
 - [ ] Historical trend tracking across many runs

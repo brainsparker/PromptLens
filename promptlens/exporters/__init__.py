@@ -6,6 +6,7 @@ from promptlens.exporters.json_exporter import JSONExporter
 from promptlens.exporters.csv_exporter import CSVExporter
 from promptlens.exporters.markdown_exporter import MarkdownExporter
 from promptlens.exporters.junit_exporter import JUnitXMLExporter
+from promptlens.exporters.otel_exporter import OTelExporter
 
 __all__ = [
     "BaseExporter",
@@ -14,4 +15,5 @@ __all__ = [
     "CSVExporter",
     "MarkdownExporter",
     "JUnitXMLExporter",
+    "OTelExporter",
 ]
