@@ -18,6 +18,7 @@ PromptLens runs golden test sets against multiple models, scores outputs using L
 - **Multi-Provider Support** - Test Anthropic (Claude), OpenAI (GPT), Google (Gemini), You.com, and local models (Ollama, LM Studio)
 - **Tool/Function Calling Evaluation** - Test tool usage with automatic + LLM judge scoring across 5 criteria
 - **LLM-as-Judge Scoring** - Automated evaluation using another LLM with configurable criteria
+- **Deterministic Checks** - Zero-cost assertions (contains, regex, valid JSON, latency and cost budgets) that run in plain Python, no judge tokens spent
 - **Cost & Latency Tracking** - Monitor per-query costs and response times across models
 - **Beautiful Reports** - Interactive HTML reports with charts, comparisons, and detailed results
 - **Multiple Export Formats** - HTML, JSON, CSV, Markdown, and JUnit XML outputs
@@ -114,6 +115,45 @@ test_cases:
 ```
 
 Save as `my_tests.yaml`.
+
+### Deterministic Checks
+
+Every test case can declare `checks`: deterministic assertions evaluated in plain Python against the response. They cost nothing to run (no judge tokens, no extra latency), so they are ideal for tight CI loops. The LLM judge still grades nuanced quality; checks catch hard rule violations.
+
+```yaml
+test_cases:
+  - id: "test-003"
+    query: "Return the user profile as JSON"
+    expected_behavior: "Valid JSON with a name field"
+    checks:
+      - type: is_valid_json
+      - type: contains
+        value: '"name"'
+      - type: not_regex
+        value: "as an ai (language )?model"
+        case_insensitive: true
+      - type: max_latency_ms
+        value: 5000
+      - type: max_cost_usd
+        value: 0.01
+```
+
+Available check types:
+
+| Type | Value | Passes when |
+| --- | --- | --- |
+| `contains` | string | response contains the string |
+| `not_contains` | string | response does not contain the string |
+| `regex` | pattern | pattern matches somewhere in the response |
+| `not_regex` | pattern | pattern matches nowhere in the response |
+| `exact_match` | string | whitespace-trimmed response equals the value |
+| `is_valid_json` | none | response (raw or a single fenced code block) parses as JSON |
+| `max_latency_ms` | number | response latency is at or under the budget |
+| `max_cost_usd` | number | response cost is at or under the budget |
+| `min_length` | number | response has at least this many characters |
+| `max_length` | number | response has at most this many characters |
+
+String checks accept `case_insensitive: true`. Check outcomes appear in the CLI summary, the HTML report, and the JUnit XML export, where any failing check marks the test case as failed for CI. See `examples/golden_sets/deterministic_checks.yaml` for a complete example.
 
 ### Creating a Configuration File
 
@@ -334,6 +374,7 @@ promptlens run config.yaml --fail-under 3.5
 
 - Each golden-set test case becomes a JUnit test case (one test suite per model).
 - A test case scoring below the threshold is reported as a failure, a model API error as an error, and an unjudged case as skipped.
+- A test case with failing deterministic checks is reported as a failure regardless of its judge score, and a case whose checks all pass counts as a pass even when judging is disabled. That means checks alone can gate a build with zero judge spend.
 - If any model's average judge score falls below `--fail-under`, the command exits with code 2, failing the pipeline. Exit code 1 is reserved for run errors, so CI can tell quality regressions apart from infrastructure failures.
 
 Example GitHub Actions step:

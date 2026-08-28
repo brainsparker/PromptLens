@@ -75,6 +75,13 @@
   .response .content { font-size: 14px; white-space: pre-wrap; }
   .response .judge { margin-top: 8px; padding-top: 8px; border-top: 1px dashed var(--border); font-size: 13px; color: var(--muted); }
   .response .error { color: var(--score-1); font-size: 13px; margin-top: 6px; }
+  .response .checks { margin-top: 8px; display: flex; gap: 6px; flex-wrap: wrap; }
+  .response .check {
+    font-size: 12px; padding: 2px 8px; border-radius: 999px; font-weight: 600;
+    font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  }
+  .response .check.pass { background: #ecfdf5; color: var(--score-5); border: 1px solid var(--score-5); }
+  .response .check.fail { background: #fef2f2; color: var(--score-1); border: 1px solid var(--score-1); }
 
   .badge {
     display: inline-block; min-width: 34px; text-align: center;
@@ -171,6 +178,13 @@
     <div class="error">Error: {{ r.error }}</div>
     {% else %}
     <div class="content">{{ r.response }}</div>
+    {% endif %}
+    {% if r.checks %}
+    <div class="checks">
+      {% for c in r.checks %}
+      <span class="check {{ 'pass' if c.passed else 'fail' }}" title="{{ c.reason }}">{{ '✓' if c.passed else '✗' }} {{ c.type }}</span>
+      {% endfor %}
+    </div>
     {% endif %}
     <div class="judge">{{ r.explanation }}</div>
   </div>
