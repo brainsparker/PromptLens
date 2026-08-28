@@ -5,6 +5,7 @@ from typing import Any, Dict, List, Optional
 
 from pydantic import BaseModel, Field
 
+from promptlens.models.checks import CheckResult
 from promptlens.models.tools import ToolCall, ToolCallEvaluation
 
 
@@ -94,6 +95,7 @@ class EvaluationResult(BaseModel):
         expected_behavior: What was expected
         model_response: The model's response with metadata
         judge_score: Score from the judge (if judging was performed)
+        check_results: Outcomes of deterministic checks (if any were defined)
         timestamp: When the evaluation was performed
     """
 
@@ -102,7 +104,28 @@ class EvaluationResult(BaseModel):
     expected_behavior: str
     model_response: ModelResponse
     judge_score: Optional[JudgeScore] = None
+    check_results: List[CheckResult] = Field(
+        default_factory=list,
+        description="Outcomes of deterministic checks for this test case",
+    )
     timestamp: datetime = Field(default_factory=datetime.utcnow)
+
+    @property
+    def checks_passed(self) -> Optional[bool]:
+        """Whether all deterministic checks passed.
+
+        Returns:
+            True if all checks passed, False if any failed, or None when
+            no checks were evaluated.
+        """
+        if not self.check_results:
+            return None
+        return all(c.passed for c in self.check_results)
+
+    @property
+    def failed_checks(self) -> List[CheckResult]:
+        """Deterministic checks that failed for this result."""
+        return [c for c in self.check_results if not c.passed]
 
 
 class RunResult(BaseModel):
@@ -177,3 +200,26 @@ class RunResult(BaseModel):
             filtered_results = [r for r in self.results if r.model_response.model == model]
 
         return sum(r.model_response.latency_ms for r in filtered_results)
+
+    def get_check_stats(self, model: Optional[str] = None) -> Dict[str, int]:
+        """Aggregate deterministic check outcomes.
+
+        Args:
+            model: Optional model name to filter by
+
+        Returns:
+            Dict with "passed" and "total" counts across all check
+            results. Both are 0 when no checks were evaluated.
+        """
+        filtered_results = self.results
+        if model:
+            filtered_results = [r for r in self.results if r.model_response.model == model]
+
+        total = 0
+        passed = 0
+        for r in filtered_results:
+            for check in r.check_results:
+                total += 1
+                if check.passed:
+                    passed += 1
+        return {"passed": passed, "total": total}

@@ -106,6 +106,14 @@ class HTMLExporter(BaseExporter):
                     "latency_ms": eval_result.model_response.latency_ms,
                     "cost_usd": eval_result.model_response.cost_usd or 0.0,
                     "error": eval_result.model_response.error,
+                    "checks": [
+                        {
+                            "type": check.check_type,
+                            "passed": check.passed,
+                            "reason": check.reason,
+                        }
+                        for check in eval_result.check_results
+                    ],
                 }
             )
 

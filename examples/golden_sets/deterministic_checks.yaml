@@ -1,0 +1,52 @@
+name: "Deterministic Checks Evaluation"
+description: "Demonstrates zero-cost deterministic checks alongside LLM judging"
+version: "1.0"
+
+test_cases:
+  - id: "check-001"
+    query: "Return a JSON object with the fields 'name' and 'email' for a fictional user"
+    expected_behavior: "Valid JSON object containing name and email fields"
+    category: "structured_output"
+    tags: ["json", "structured"]
+    checks:
+      - type: is_valid_json
+      - type: contains
+        value: '"name"'
+      - type: contains
+        value: '"email"'
+
+  - id: "check-002"
+    query: "Write a one-sentence product tagline for a password manager"
+    expected_behavior: "A short, punchy tagline about password security"
+    category: "copywriting"
+    tags: ["marketing", "concise"]
+    checks:
+      - type: max_length
+        value: 200
+      - type: min_length
+        value: 10
+      - type: not_regex
+        value: "as an ai (language )?model"
+        case_insensitive: true
+
+  - id: "check-003"
+    query: "What year did the Apollo 11 moon landing happen?"
+    expected_behavior: "States the year 1969"
+    category: "factual"
+    tags: ["facts", "history"]
+    checks:
+      - type: contains
+        value: "1969"
+      - type: max_latency_ms
+        value: 10000
+      - type: max_cost_usd
+        value: 0.05
+
+  - id: "check-004"
+    query: "Reply with exactly the word OK and nothing else"
+    expected_behavior: "Responds with exactly 'OK'"
+    category: "instruction_following"
+    tags: ["format", "strict"]
+    checks:
+      - type: exact_match
+        value: "OK"

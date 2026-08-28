@@ -7,10 +7,14 @@ evaluated golden-set entry.
 
 Mapping rules:
     - A test case whose model response errored is reported as an <error>.
+    - A test case with one or more failing deterministic checks is
+      reported as a <failure>, regardless of judge score.
     - A test case whose judge score is below the failure threshold is
       reported as a <failure>.
     - A test case that was never judged (judging disabled or judge failed)
-      is reported as <skipped>, so CI does not report a false pass.
+      and has no failing checks is reported as <skipped> when it also has
+      no passing checks, so CI does not report a false pass. A case with
+      only passing checks and no judge score counts as a pass.
     - Everything else is a pass.
 """
 
@@ -126,6 +130,7 @@ class JUnitXMLExporter(BaseExporter):
 
             response_error = eval_result.model_response.error
             judge_score = eval_result.judge_score
+            failed_checks = eval_result.failed_checks
 
             if response_error:
                 errors += 1
@@ -133,6 +138,29 @@ class JUnitXMLExporter(BaseExporter):
                 error_el.set("message", _truncate(response_error, 300))
                 error_el.set("type", "ModelResponseError")
                 error_el.text = response_error
+            elif failed_checks:
+                failures += 1
+                failure_el = ET.SubElement(testcase, "failure")
+                failure_el.set(
+                    "message",
+                    f"{len(failed_checks)} deterministic check(s) failed: "
+                    + ", ".join(c.check_type for c in failed_checks),
+                )
+                failure_el.set("type", "DeterministicCheckFailed")
+                detail_lines = [
+                    f"Query: {_truncate(eval_result.query, 500)}",
+                ]
+                for check in failed_checks:
+                    detail_lines.append(
+                        f"[{check.check_type}] {_truncate(check.reason, 500)}"
+                    )
+                if judge_score is not None:
+                    detail_lines.append(f"Judge score: {judge_score.score}")
+                failure_el.text = "\n".join(detail_lines)
+            elif judge_score is None and eval_result.check_results:
+                # Checks all passed and judging produced no score: treat as
+                # a pass on the strength of the deterministic checks.
+                pass
             elif judge_score is None:
                 skipped += 1
                 skipped_el = ET.SubElement(testcase, "skipped")
@@ -168,6 +196,17 @@ class JUnitXMLExporter(BaseExporter):
                 out_lines.append(
                     f"judge_explanation: {_truncate(judge_score.explanation, 500)}"
                 )
+            if eval_result.check_results:
+                passed_count = sum(1 for c in eval_result.check_results if c.passed)
+                out_lines.append(
+                    f"checks: {passed_count}/{len(eval_result.check_results)} passed"
+                )
+                for check in eval_result.check_results:
+                    status = "pass" if check.passed else "FAIL"
+                    out_lines.append(
+                        f"check[{check.check_type}]: {status} - "
+                        f"{_truncate(check.reason, 200)}"
+                    )
             system_out.text = "\n".join(out_lines)
 
         suite.set("tests", str(len(model_results)))

@@ -16,6 +16,7 @@ from rich.progress import (
     TimeElapsedColumn,
 )
 
+from promptlens.checks import evaluate_checks
 from promptlens.judges.llm_judge import LLMJudge
 from promptlens.loaders.yaml_loader import get_loader
 from promptlens.models.config import RunConfig
@@ -215,6 +216,12 @@ class Runner:
                 timeout_seconds=self.config.execution.timeout_seconds,
             )
 
+            # Run deterministic checks (only if generation succeeded).
+            # Checks are pure Python: no API calls, no cost.
+            check_results = []
+            if not model_response.error and test_case.checks:
+                check_results = evaluate_checks(test_case, model_response)
+
             # Judge the response (only if generation succeeded)
             judge_score = None
             if not model_response.error:
@@ -232,6 +239,7 @@ class Runner:
                 expected_behavior=test_case.expected_behavior,
                 model_response=model_response,
                 judge_score=judge_score,
+                check_results=check_results,
                 timestamp=datetime.utcnow(),
             )
 
@@ -249,9 +257,16 @@ class Runner:
             total_cost = result.get_total_cost(model)
             total_latency = result.get_total_latency(model)
 
+            check_stats = result.get_check_stats(model)
+
             console.print(f"[bold]{model}[/bold]")
             if avg_score is not None:
                 console.print(f"  Average Score: {avg_score:.2f}/5.0")
+            if check_stats["total"] > 0:
+                color = "green" if check_stats["passed"] == check_stats["total"] else "red"
+                console.print(
+                    f"  Checks: [{color}]{check_stats['passed']}/{check_stats['total']} passed[/{color}]"
+                )
             console.print(f"  Total Cost: ${total_cost:.4f}")
             console.print(f"  Total Time: {total_latency:.0f}ms")
             console.print()
