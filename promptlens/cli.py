@@ -130,12 +130,22 @@ def cli(log_level: str) -> None:
         "failure threshold used by the junit export format."
     ),
 )
+@click.option(
+    "--fail-on-trajectory",
+    is_flag=True,
+    help=(
+        "Quality gate for CI: exit with code 2 if any test case's "
+        "deterministic trajectory checks failed. Trajectory checks run "
+        "without an LLM judge, so this gate is free and stable."
+    ),
+)
 def run(
     config: str,
     golden_set: Optional[str],
     output_dir: Optional[str],
     dry_run: bool,
     fail_under: Optional[float],
+    fail_on_trajectory: bool,
 ) -> None:
     """Run evaluation with the given configuration file.
 
@@ -146,6 +156,7 @@ def run(
         promptlens run config.yaml --output-dir ./results
         promptlens run config.yaml --dry-run
         promptlens run config.yaml --fail-under 3.5
+        promptlens run config.yaml --fail-on-trajectory
     """
     try:
         # Load config
@@ -218,6 +229,27 @@ def run(
         if "html" in run_config.output.formats:
             html_path = run_output_dir / "report.html"
             console.print(f"\n[cyan]View report: file://{html_path.absolute()}[/cyan]")
+
+        # Trajectory gate for CI (deterministic, zero LLM cost)
+        if fail_on_trajectory:
+            trajectory_failures = result.get_trajectory_failures()
+            if trajectory_failures:
+                console.print(
+                    "\n[bold red]✗ Trajectory gate failed (--fail-on-trajectory):[/bold red]"
+                )
+                for eval_result in trajectory_failures:
+                    for check in eval_result.trajectory_evaluation.failed_checks:
+                        console.print(
+                            f"  {eval_result.test_case_id} "
+                            f"({eval_result.model_response.model}): "
+                            f"[{check.check}] {check.detail}"
+                        )
+                sys.exit(2)
+            stats = result.get_trajectory_stats()
+            console.print(
+                f"\n[bold green]✓ Trajectory gate passed "
+                f"({stats['passed']}/{stats['evaluated']} checks)[/bold green]"
+            )
 
         # Quality gate for CI
         if fail_under is not None:

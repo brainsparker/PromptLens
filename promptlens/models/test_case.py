@@ -5,6 +5,7 @@ from typing import Any, Dict, List, Optional
 from pydantic import BaseModel, ConfigDict, Field
 
 from promptlens.models.tools import ToolDefinition, ExpectedToolCall
+from promptlens.models.trajectory import TrajectorySpec
 
 
 class TestCase(BaseModel):
@@ -48,6 +49,14 @@ class TestCase(BaseModel):
     tool_execution: bool = Field(
         default=False,
         description="Whether to actually execute tools (default: False, evaluation only)"
+    )
+    trajectory: Optional[TrajectorySpec] = Field(
+        None,
+        description=(
+            "Deterministic trajectory assertions on the tool-call sequence "
+            "(require/forbid/order/min_calls/max_calls/no_repeat_calls), "
+            "evaluated without an LLM judge"
+        )
     )
 
     model_config = ConfigDict(json_schema_extra={

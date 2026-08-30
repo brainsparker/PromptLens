@@ -17,6 +17,7 @@ PromptLens runs golden test sets against multiple models, scores outputs using L
 
 - **Multi-Provider Support** - Test Anthropic (Claude), OpenAI (GPT), Google (Gemini), You.com, and local models (Ollama, LM Studio)
 - **Tool/Function Calling Evaluation** - Test tool usage with automatic + LLM judge scoring across 5 criteria
+- **Deterministic Trajectory Assertions** - Assert on agent tool-call sequences (require, forbid, order, step budgets, loop detection) with zero LLM cost and stable pass/fail results
 - **LLM-as-Judge Scoring** - Automated evaluation using another LLM with configurable criteria
 - **Cost & Latency Tracking** - Monitor per-query costs and response times across models
 - **Beautiful Reports** - Interactive HTML reports with charts, comparisons, and detailed results
@@ -326,14 +327,15 @@ output:
 
 PromptLens speaks the language your CI system already understands: JUnit XML test reports and exit codes.
 
-Add `junit` to your output formats, then gate the build on judge scores:
+Add `junit` to your output formats, then gate the build on judge scores, trajectory checks, or both:
 
 ```bash
-promptlens run config.yaml --fail-under 3.5
+promptlens run config.yaml --fail-under 3.5 --fail-on-trajectory
 ```
 
 - Each golden-set test case becomes a JUnit test case (one test suite per model).
-- A test case scoring below the threshold is reported as a failure, a model API error as an error, and an unjudged case as skipped.
+- A test case scoring below the threshold is reported as a failure, a model API error as an error, and an unjudged case (with no trajectory checks) as skipped. Failed trajectory assertions are reported as `TrajectoryAssertionFailed` failures.
+- `--fail-on-trajectory` exits with code 2 if any test case's deterministic trajectory checks failed. Because these checks never call an LLM, this gate adds zero cost and never flakes.
 - If any model's average judge score falls below `--fail-under`, the command exits with code 2, failing the pipeline. Exit code 1 is reserved for run errors, so CI can tell quality regressions apart from infrastructure failures.
 
 Example GitHub Actions step:
@@ -535,6 +537,60 @@ promptlens run examples/configs/tool_evaluation.yaml
 ```
 
 See [examples/golden_sets/tool_calling.yaml](examples/golden_sets/tool_calling.yaml) for complete examples.
+
+### Trajectory Assertions (Deterministic, Zero LLM Cost)
+
+Agent evaluations are notoriously flaky and expensive when every check goes through an LLM judge. Trajectory assertions check the *sequence* of tool calls a model makes against declarative constraints, with no judge involved: results are pure functions of the recorded calls, so they are stable across runs and free to compute.
+
+Add a `trajectory` block to any test case:
+
+```yaml
+- id: "refund-safe-path"
+  query: "I want a refund for order ORD-123"
+  expected_behavior: "Verify identity before refunding"
+
+  tools:
+    - name: "verify_identity"
+      description: "Verify a customer's identity"
+    - name: "issue_refund"
+      description: "Issue a refund"
+    - name: "delete_account"
+      description: "Delete a customer account"
+
+  trajectory:
+    require:                              # must be called at least once
+      - verify_identity
+      - name: issue_refund                # optionally with an argument subset
+        args:
+          order_id: "ORD-123"
+    forbid:                               # must never be called
+      - delete_account
+    order:                                # must appear in this relative order
+      - [verify_identity, issue_refund]   # (other calls may interleave)
+    min_calls: 1                          # call count bounds
+    max_calls: 4                          # step budget: catches runaway agents
+    no_repeat_calls: true                 # same tool + same args twice = loop
+```
+
+**Available checks:**
+
+| Check | Asserts |
+|---|---|
+| `require` | Tool was called at least once, optionally with a matching argument subset |
+| `forbid` | Tool was never called |
+| `order` | Named tools appear in the given relative order (subsequence match) |
+| `min_calls` / `max_calls` | Total call count bounds; `max_calls: 0` asserts no tools were used |
+| `no_repeat_calls` | No identical repeated call (catches agent loops) |
+
+Trajectory results appear in the run summary, the JSON export, and the JUnit XML report (as `TrajectoryAssertionFailed` failures). They run alongside LLM-as-judge scoring or entirely without it.
+
+Gate CI on trajectory checks with no judge cost at all:
+
+```bash
+promptlens run config.yaml --fail-on-trajectory
+```
+
+**Try it:** see [examples/golden_sets/agent_trajectory.yaml](examples/golden_sets/agent_trajectory.yaml) for a complete example golden set.
 
 ---
 
