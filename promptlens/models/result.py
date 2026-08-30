@@ -6,6 +6,7 @@ from typing import Any, Dict, List, Optional
 from pydantic import BaseModel, Field
 
 from promptlens.models.tools import ToolCall, ToolCallEvaluation
+from promptlens.models.trajectory import TrajectoryEvaluation
 
 
 class ModelResponse(BaseModel):
@@ -94,6 +95,8 @@ class EvaluationResult(BaseModel):
         expected_behavior: What was expected
         model_response: The model's response with metadata
         judge_score: Score from the judge (if judging was performed)
+        trajectory_evaluation: Deterministic trajectory check results
+            (if the test case declared trajectory assertions)
         timestamp: When the evaluation was performed
     """
 
@@ -102,6 +105,10 @@ class EvaluationResult(BaseModel):
     expected_behavior: str
     model_response: ModelResponse
     judge_score: Optional[JudgeScore] = None
+    trajectory_evaluation: Optional[TrajectoryEvaluation] = Field(
+        None,
+        description="Deterministic trajectory assertion results (zero LLM cost)",
+    )
     timestamp: datetime = Field(default_factory=datetime.utcnow)
 
 
@@ -162,6 +169,49 @@ class RunResult(BaseModel):
         return sum(
             r.model_response.cost_usd or 0.0 for r in filtered_results
         )
+
+    def get_trajectory_failures(
+        self, model: Optional[str] = None
+    ) -> List[EvaluationResult]:
+        """Return results whose deterministic trajectory checks failed.
+
+        Args:
+            model: Optional model name to filter by
+
+        Returns:
+            Evaluation results with a failed trajectory evaluation
+        """
+        filtered_results = self.results
+        if model:
+            filtered_results = [r for r in self.results if r.model_response.model == model]
+
+        return [
+            r
+            for r in filtered_results
+            if r.trajectory_evaluation is not None and not r.trajectory_evaluation.passed
+        ]
+
+    def get_trajectory_stats(self, model: Optional[str] = None) -> Dict[str, int]:
+        """Count trajectory evaluations by outcome.
+
+        Args:
+            model: Optional model name to filter by
+
+        Returns:
+            Dict with 'evaluated', 'passed', and 'failed' counts
+        """
+        filtered_results = self.results
+        if model:
+            filtered_results = [r for r in self.results if r.model_response.model == model]
+
+        evaluated = [r for r in filtered_results if r.trajectory_evaluation is not None]
+        passed = sum(1 for r in evaluated if r.trajectory_evaluation.passed)
+
+        return {
+            "evaluated": len(evaluated),
+            "passed": passed,
+            "failed": len(evaluated) - passed,
+        }
 
     def get_total_latency(self, model: Optional[str] = None) -> float:
         """Calculate total latency for a specific model or all models.

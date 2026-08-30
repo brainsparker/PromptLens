@@ -16,6 +16,7 @@ from rich.progress import (
     TimeElapsedColumn,
 )
 
+from promptlens.evaluators.trajectory import evaluate_trajectory
 from promptlens.judges.llm_judge import LLMJudge
 from promptlens.loaders.yaml_loader import get_loader
 from promptlens.models.config import RunConfig
@@ -215,6 +216,23 @@ class Runner:
                 timeout_seconds=self.config.execution.timeout_seconds,
             )
 
+            # Deterministic trajectory checks (zero LLM cost, run before the
+            # judge so trajectory results exist even when judging fails)
+            trajectory_evaluation = None
+            if test_case.trajectory is not None and not model_response.error:
+                try:
+                    trajectory_evaluation = evaluate_trajectory(
+                        test_case.trajectory, model_response.tool_calls
+                    )
+                    if not trajectory_evaluation.passed:
+                        logger.info(
+                            f"Trajectory checks failed for '{test_case.id}' "
+                            f"({model_response.model}): "
+                            f"{trajectory_evaluation.summary()}"
+                        )
+                except Exception as e:
+                    logger.error(f"Trajectory evaluation failed: {e}")
+
             # Judge the response (only if generation succeeded)
             judge_score = None
             if not model_response.error:
@@ -232,6 +250,7 @@ class Runner:
                 expected_behavior=test_case.expected_behavior,
                 model_response=model_response,
                 judge_score=judge_score,
+                trajectory_evaluation=trajectory_evaluation,
                 timestamp=datetime.utcnow(),
             )
 
@@ -252,6 +271,13 @@ class Runner:
             console.print(f"[bold]{model}[/bold]")
             if avg_score is not None:
                 console.print(f"  Average Score: {avg_score:.2f}/5.0")
+            trajectory_stats = result.get_trajectory_stats(model)
+            if trajectory_stats["evaluated"]:
+                color = "green" if trajectory_stats["failed"] == 0 else "red"
+                console.print(
+                    f"  Trajectory Checks: [{color}]{trajectory_stats['passed']}/"
+                    f"{trajectory_stats['evaluated']} passed[/{color}]"
+                )
             console.print(f"  Total Cost: ${total_cost:.4f}")
             console.print(f"  Total Time: {total_latency:.0f}ms")
             console.print()
