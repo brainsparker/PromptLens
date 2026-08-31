@@ -18,6 +18,7 @@ PromptLens runs golden test sets against multiple models, scores outputs using L
 - **Multi-Provider Support** - Test Anthropic (Claude), OpenAI (GPT), Google (Gemini), You.com, and local models (Ollama, LM Studio)
 - **Tool/Function Calling Evaluation** - Test tool usage with automatic + LLM judge scoring across 5 criteria
 - **LLM-as-Judge Scoring** - Automated evaluation using another LLM with configurable criteria
+- **Multi-Judge Consensus** - Score with a panel of 2-5 judges in parallel: median consensus, per-judge scores, and a low-confidence flag when judges disagree
 - **Cost & Latency Tracking** - Monitor per-query costs and response times across models
 - **Beautiful Reports** - Interactive HTML reports with charts, comparisons, and detailed results
 - **Multiple Export Formats** - HTML, JSON, CSV, Markdown, and JUnit XML outputs
@@ -296,6 +297,36 @@ judge:
     - helpfulness
     - safety
 ```
+
+### Multi-Judge Consensus
+
+A single judge is an uncalibrated number. To score with a panel instead, list
+two to five judges. Each judge evaluates every response in parallel, the
+reported score is the panel median, and results where the panel spread
+exceeds `agreement_threshold` are flagged low confidence in the HTML report
+and JSON output.
+
+```yaml
+judge:
+  temperature: 0.3                  # Shared default settings still apply
+  criteria:
+    - accuracy
+    - helpfulness
+  judges:                           # 2-5 judges; overrides provider/model above
+    - provider: anthropic
+      model: claude-3-5-sonnet-20241022
+    - provider: openai
+      model: gpt-4o
+    - provider: google
+      model: gemini-1.5-pro
+  agreement_threshold: 1            # Flag results where max - min score > 1
+```
+
+Each result then carries `individual_scores` (per-judge score and
+explanation), `agreement_gap` (max minus min panel score), and
+`low_confidence` in the JSON export, so disagreements are auditable rather
+than silently averaged away. Mixing providers on the panel also reduces
+self-preference bias, where a judge favors outputs from its own model family.
 
 ### Execution
 
@@ -657,7 +688,7 @@ class RuleBasedJudge(BaseJudge):
 - [x] JUnit XML export and `--fail-under` CI quality gate
 - [x] Parallel execution with retry logic
 - [x] Cross-run comparison with `--fail-on-regression` CI gate
-- [ ] Multi-judge consensus scoring
+- [x] Multi-judge consensus scoring with agreement signal
 - [ ] Synthetic test case generation
 - [ ] Historical trend tracking across many runs
 - [ ] GitHub Action for CI/CD

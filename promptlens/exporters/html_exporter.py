@@ -106,6 +106,21 @@ class HTMLExporter(BaseExporter):
                     "latency_ms": eval_result.model_response.latency_ms,
                     "cost_usd": eval_result.model_response.cost_usd or 0.0,
                     "error": eval_result.model_response.error,
+                    "low_confidence": (
+                        eval_result.judge_score.low_confidence
+                        if eval_result.judge_score
+                        else False
+                    ),
+                    "agreement_gap": (
+                        eval_result.judge_score.agreement_gap
+                        if eval_result.judge_score
+                        else None
+                    ),
+                    "judge_count": (
+                        len(eval_result.judge_score.individual_scores)
+                        if eval_result.judge_score
+                        else 0
+                    ),
                 }
             )
 

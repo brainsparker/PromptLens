@@ -86,6 +86,8 @@
   .badge.s4 { background: var(--score-4); }
   .badge.s5 { background: var(--score-5); }
   .badge.none { background: var(--muted); }
+  .badge.low-confidence { background: #b45309; min-width: 0; }
+  .consensus-note { font-size: 12px; color: var(--muted); }
 
   footer { margin-top: 36px; font-size: 12px; color: var(--muted); }
 </style>
@@ -164,6 +166,11 @@
       <span class="badge s{{ r.score }}">{{ r.score }}/5</span>
       {% else %}
       <span class="badge none">unscored</span>
+      {% endif %}
+      {% if r.low_confidence %}
+      <span class="badge low-confidence" title="Judge panel disagreed (gap {{ r.agreement_gap }} across {{ r.judge_count }} judges)">low confidence</span>
+      {% elif r.judge_count and r.judge_count > 1 %}
+      <span class="consensus-note" title="Consensus of {{ r.judge_count }} judges (gap {{ r.agreement_gap }})">{{ r.judge_count }}-judge consensus</span>
       {% endif %}
       <span class="stats">{{ "%.0f" | format(r.latency_ms) }} ms · ${{ "%.4f" | format(r.cost_usd) }}</span>
     </div>

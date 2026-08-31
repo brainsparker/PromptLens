@@ -82,15 +82,49 @@ class ModelConfig(BaseModel):
         return value
 
 
+class JudgeInstanceConfig(BaseModel):
+    """Configuration for a single judge on a multi-judge panel.
+
+    Attributes:
+        provider: Provider for this judge model
+        model: Model to use for judging
+        temperature: Sampling temperature for this judge
+    """
+
+    provider: str
+    model: str
+    temperature: float = 0.3
+
+    @field_validator("provider", "model")
+    @classmethod
+    def validate_non_empty(cls, value: str) -> str:
+        if not value or not value.strip():
+            raise ValueError("judge provider and model must be non-empty")
+        return value
+
+    @field_validator("temperature")
+    @classmethod
+    def validate_temperature(cls, value: float) -> float:
+        if not 0.0 <= value <= 2.0:
+            raise ValueError("temperature must be between 0.0 and 2.0")
+        return value
+
+
 class JudgeConfig(BaseModel):
     """Configuration for the judge.
 
     Attributes:
-        provider: Provider for judge model
-        model: Model to use for judging
+        provider: Provider for judge model (single-judge mode)
+        model: Model to use for judging (single-judge mode)
         temperature: Sampling temperature
         custom_prompt: Optional custom judge prompt template
         criteria: List of criteria to evaluate
+        judges: Optional panel of judges for consensus scoring.
+            When set, each listed judge evaluates every response in
+            parallel and the reported score is the panel median. The
+            single-judge provider/model fields are ignored in that case.
+        agreement_threshold: Maximum spread (max score minus min score)
+            the panel can have before a result is flagged low confidence.
     """
 
     provider: str = "anthropic"
@@ -98,6 +132,31 @@ class JudgeConfig(BaseModel):
     temperature: float = 0.3
     custom_prompt: Optional[str] = None
     criteria: List[str] = Field(default_factory=lambda: ["accuracy", "helpfulness"])
+    judges: List[JudgeInstanceConfig] = Field(default_factory=list)
+    agreement_threshold: int = 1
+
+    @field_validator("judges")
+    @classmethod
+    def validate_judges(
+        cls, value: List[JudgeInstanceConfig]
+    ) -> List[JudgeInstanceConfig]:
+        if len(value) == 1:
+            raise ValueError(
+                "judges panel must list at least two judges; "
+                "for a single judge use the provider/model fields instead"
+            )
+        if len(value) > 5:
+            raise ValueError("judges panel supports at most 5 judges")
+        return value
+
+    @field_validator("agreement_threshold")
+    @classmethod
+    def validate_agreement_threshold(cls, value: int) -> int:
+        if not 0 <= value <= 4:
+            raise ValueError(
+                "agreement_threshold must be between 0 and 4 (scores range 1-5)"
+            )
+        return value
 
 
 class ExecutionConfig(BaseModel):
