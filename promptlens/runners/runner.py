@@ -16,7 +16,7 @@ from rich.progress import (
     TimeElapsedColumn,
 )
 
-from promptlens.judges.llm_judge import LLMJudge
+from promptlens.judges.factory import create_judge
 from promptlens.loaders.yaml_loader import get_loader
 from promptlens.models.config import RunConfig
 from promptlens.models.result import EvaluationResult, RunResult
@@ -44,8 +44,8 @@ class Runner:
         self.config = config
         self.run_id = str(uuid.uuid4())[:8]
 
-        # Initialize judge
-        self.judge = LLMJudge(config.judge)
+        # Initialize judge (single LLM judge or multi-judge consensus panel)
+        self.judge = create_judge(config.judge)
 
         # Initialize providers for each model
         self.providers: List[BaseProvider] = []

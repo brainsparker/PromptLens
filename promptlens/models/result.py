@@ -48,6 +48,22 @@ class ModelResponse(BaseModel):
     )
 
 
+class IndividualJudgeScore(BaseModel):
+    """Score from a single judge on a multi-judge panel.
+
+    Attributes:
+        score: Integer score from 1-5
+        explanation: Explanation of the score
+        judge_model: Model used for judging
+        judge_provider: Provider of the judge model
+    """
+
+    score: int = Field(..., ge=1, le=5)
+    explanation: str
+    judge_model: str
+    judge_provider: str
+
+
 class JudgeScore(BaseModel):
     """Score from LLM judge.
 
@@ -61,6 +77,10 @@ class JudgeScore(BaseModel):
         tool_evaluations: Detailed evaluation of each tool call (if applicable)
         tool_usage_score: Overall score for tool usage correctness (1-5)
         tool_efficiency_score: Score for tool usage efficiency (1-5)
+        individual_scores: Per-judge scores when consensus scoring is used
+        agreement_gap: Spread between highest and lowest panel score
+        low_confidence: True when the panel disagreed beyond the
+            configured agreement threshold
     """
 
     score: int = Field(..., ge=1, le=5)  # Must be 1-5
@@ -82,6 +102,20 @@ class JudgeScore(BaseModel):
     tool_efficiency_score: Optional[float] = Field(
         None,
         description="Score for tool usage efficiency (0.0-1.0)"
+    )
+
+    # Multi-judge consensus fields (optional, for backward compatibility)
+    individual_scores: List[IndividualJudgeScore] = Field(
+        default_factory=list,
+        description="Per-judge scores when multi-judge consensus is used"
+    )
+    agreement_gap: Optional[int] = Field(
+        None,
+        description="Spread between highest and lowest panel score (0-4)"
+    )
+    low_confidence: bool = Field(
+        False,
+        description="True when panel disagreement exceeded the agreement threshold"
     )
 
 
