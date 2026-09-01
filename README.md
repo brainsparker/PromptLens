@@ -17,6 +17,7 @@ PromptLens runs golden test sets against multiple models, scores outputs using L
 
 - **Multi-Provider Support** - Test Anthropic (Claude), OpenAI (GPT), Google (Gemini), You.com, and local models (Ollama, LM Studio)
 - **Tool/Function Calling Evaluation** - Test tool usage with automatic + LLM judge scoring across 5 criteria
+- **Trajectory Assertions** - Deterministic checks on agent behavior (must_call, must_not_call, call_order, max_calls, whitelists) with zero LLM cost and a `--fail-on-assertions` CI gate
 - **LLM-as-Judge Scoring** - Automated evaluation using another LLM with configurable criteria
 - **Cost & Latency Tracking** - Monitor per-query costs and response times across models
 - **Beautiful Reports** - Interactive HTML reports with charts, comparisons, and detailed results
@@ -536,6 +537,72 @@ promptlens run examples/configs/tool_evaluation.yaml
 
 See [examples/golden_sets/tool_calling.yaml](examples/golden_sets/tool_calling.yaml) for complete examples.
 
+### Trajectory Assertions (Deterministic Agent Behavior Checks)
+
+LLM-as-judge scoring tells you whether a response was good. Trajectory assertions tell you whether the agent did the right thing: called the required tools, avoided forbidden ones, followed the expected workflow order, and stayed within a call budget. They are evaluated locally against the tool calls captured in the response, with zero LLM calls: no judge cost, no judge variance, fully reproducible pass/fail. That makes them safe to gate CI on.
+
+Add a `trajectory` block to any test case:
+
+```yaml
+- id: "traj-001"
+  query: "Book me a haircut for Tuesday morning"
+  expected_behavior: "Check availability first, then create the booking"
+  evaluation_mode: "tool_and_answer"
+
+  tools:
+    - name: "check_availability"
+      description: "Check open appointment slots"
+      parameters:
+        day:
+          type: "string"
+          description: "Day to check"
+          required: true
+    - name: "create_booking"
+      description: "Create an appointment booking"
+      parameters:
+        slot:
+          type: "string"
+          description: "Slot identifier to book"
+          required: true
+
+  trajectory:
+    must_call:
+      - name: "check_availability"          # args optional; partial match by default
+    must_not_call:
+      - "cancel_booking"                    # safety: never call this
+    call_order:                             # subsequence: other calls may interleave
+      - "check_availability"
+      - "create_booking"
+    max_calls: 4                            # total tool call budget
+```
+
+**Available assertions:**
+
+| Assertion | What it checks |
+|-----------|----------------|
+| `must_call` | Tool was called; optional argument matching (`partial`, `exact`, `ignore`) and call-count bounds (`min_times`, `max_times`) |
+| `must_not_call` | Tool was never called |
+| `call_order` | Tools appear in this relative order (as a subsequence) |
+| `max_calls` | Total tool calls stay within a budget |
+| `allow_other_calls: false` | Only tools named in `must_call`/`call_order` may be called (whitelist mode, useful for safety testing) |
+
+**Loop detection:** cap repeated calls with `min_times: 0, max_times: N` on a `must_call` matcher, or bound the whole trajectory with `max_calls`.
+
+**CI integration:** failed assertions are reported as JUnit `<failure type="TrajectoryAssertionFailure">` entries, shown in the HTML, Markdown, and JSON reports, and gate the build:
+
+```bash
+promptlens run config.yaml --fail-on-assertions
+```
+
+Because assertions are deterministic, this gate never flakes on judge variance. Combine with `--fail-under` to gate on both behavior and quality.
+
+**Try it:**
+```bash
+promptlens validate examples/golden_sets/trajectory_assertions.yaml
+```
+
+See [examples/golden_sets/trajectory_assertions.yaml](examples/golden_sets/trajectory_assertions.yaml) for complete examples covering required calls, safety checks, workflow order, and whitelist mode.
+
 ---
 
 ## Advanced Usage
@@ -657,6 +724,7 @@ class RuleBasedJudge(BaseJudge):
 - [x] JUnit XML export and `--fail-under` CI quality gate
 - [x] Parallel execution with retry logic
 - [x] Cross-run comparison with `--fail-on-regression` CI gate
+- [x] Deterministic trajectory assertions with `--fail-on-assertions` CI gate
 - [ ] Multi-judge consensus scoring
 - [ ] Synthetic test case generation
 - [ ] Historical trend tracking across many runs

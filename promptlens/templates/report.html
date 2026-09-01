@@ -165,12 +165,29 @@
       {% else %}
       <span class="badge none">unscored</span>
       {% endif %}
+      {% if r.trajectory is not none %}
+      {% if r.trajectory.passed %}
+      <span class="badge s5">trajectory ✓</span>
+      {% else %}
+      <span class="badge s1">trajectory ✗</span>
+      {% endif %}
+      {% endif %}
       <span class="stats">{{ "%.0f" | format(r.latency_ms) }} ms · ${{ "%.4f" | format(r.cost_usd) }}</span>
     </div>
     {% if r.error %}
     <div class="error">Error: {{ r.error }}</div>
     {% else %}
     <div class="content">{{ r.response }}</div>
+    {% endif %}
+    {% if r.trajectory is not none and not r.trajectory.passed %}
+    <div class="error">
+      Observed tool calls: {{ r.trajectory.observed_calls }}
+      <ul>
+      {% for detail in r.trajectory.failed_checks %}
+        <li>{{ detail }}</li>
+      {% endfor %}
+      </ul>
+    </div>
     {% endif %}
     <div class="judge">{{ r.explanation }}</div>
   </div>

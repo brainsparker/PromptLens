@@ -104,9 +104,15 @@ class MarkdownExporter(BaseExporter):
             lines.append(f"**Expected:** {evals[0].expected_behavior}")
             lines.append("")
 
+            has_trajectory = any(e.trajectory_result is not None for e in evals)
+
             # Results table
-            lines.append("| Model | Score | Latency | Cost | Response |")
-            lines.append("|-------|-------|---------|------|----------|")
+            if has_trajectory:
+                lines.append("| Model | Score | Trajectory | Latency | Cost | Response |")
+                lines.append("|-------|-------|------------|---------|------|----------|")
+            else:
+                lines.append("| Model | Score | Latency | Cost | Response |")
+                lines.append("|-------|-------|---------|------|----------|")
 
             for eval_result in evals:
                 score = (
@@ -120,9 +126,37 @@ class MarkdownExporter(BaseExporter):
                 if eval_result.model_response.error:
                     response = f"ERROR: {eval_result.model_response.error}"
 
-                lines.append(
-                    f"| {eval_result.model_response.model} | {score} | {latency} | {cost} | {response}... |"
-                )
+                if has_trajectory:
+                    if eval_result.trajectory_result is None:
+                        trajectory = "N/A"
+                    elif eval_result.trajectory_result.passed:
+                        trajectory = "✅ pass"
+                    else:
+                        trajectory = (
+                            f"❌ {len(eval_result.trajectory_result.failed_checks)} failed"
+                        )
+                    lines.append(
+                        f"| {eval_result.model_response.model} | {score} | {trajectory} | {latency} | {cost} | {response}... |"
+                    )
+                else:
+                    lines.append(
+                        f"| {eval_result.model_response.model} | {score} | {latency} | {cost} | {response}... |"
+                    )
+
+            # Failed assertion details
+            for eval_result in evals:
+                tr = eval_result.trajectory_result
+                if tr is not None and not tr.passed:
+                    lines.append("")
+                    lines.append(
+                        f"**Failed trajectory assertions "
+                        f"({eval_result.model_response.model}):**"
+                    )
+                    lines.append("")
+                    observed = " -> ".join(tr.observed_calls) or "(none)"
+                    lines.append(f"- Observed tool calls: `{observed}`")
+                    for check in tr.failed_checks:
+                        lines.append(f"- {check.detail}")
 
             lines.append("")
 

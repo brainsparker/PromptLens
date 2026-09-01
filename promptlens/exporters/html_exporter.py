@@ -106,6 +106,21 @@ class HTMLExporter(BaseExporter):
                     "latency_ms": eval_result.model_response.latency_ms,
                     "cost_usd": eval_result.model_response.cost_usd or 0.0,
                     "error": eval_result.model_response.error,
+                    "trajectory": (
+                        {
+                            "passed": eval_result.trajectory_result.passed,
+                            "observed_calls": " -> ".join(
+                                eval_result.trajectory_result.observed_calls
+                            )
+                            or "(none)",
+                            "failed_checks": [
+                                check.detail
+                                for check in eval_result.trajectory_result.failed_checks
+                            ],
+                        }
+                        if eval_result.trajectory_result is not None
+                        else None
+                    ),
                 }
             )
 
