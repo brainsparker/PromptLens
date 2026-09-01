@@ -7,10 +7,15 @@ evaluated golden-set entry.
 
 Mapping rules:
     - A test case whose model response errored is reported as an <error>.
+    - A test case whose trajectory assertions failed is reported as a
+      <failure> (checked before judge score, since assertions are
+      deterministic).
     - A test case whose judge score is below the failure threshold is
       reported as a <failure>.
     - A test case that was never judged (judging disabled or judge failed)
-      is reported as <skipped>, so CI does not report a false pass.
+      and has no trajectory result is reported as <skipped>, so CI does not
+      report a false pass. A case with passing trajectory assertions and no
+      judge score is a pass: it was evaluated, deterministically.
     - Everything else is a pass.
 """
 
@@ -126,6 +131,7 @@ class JUnitXMLExporter(BaseExporter):
 
             response_error = eval_result.model_response.error
             judge_score = eval_result.judge_score
+            trajectory_result = eval_result.trajectory_result
 
             if response_error:
                 errors += 1
@@ -133,14 +139,35 @@ class JUnitXMLExporter(BaseExporter):
                 error_el.set("message", _truncate(response_error, 300))
                 error_el.set("type", "ModelResponseError")
                 error_el.text = response_error
-            elif judge_score is None:
+            elif trajectory_result is not None and not trajectory_result.passed:
+                failures += 1
+                failed_details = "\n".join(
+                    check.detail for check in trajectory_result.failed_checks
+                )
+                failure_el = ET.SubElement(testcase, "failure")
+                failure_el.set(
+                    "message",
+                    _truncate(
+                        f"{len(trajectory_result.failed_checks)} trajectory "
+                        f"assertion(s) failed: {failed_details}",
+                        300,
+                    ),
+                )
+                failure_el.set("type", "TrajectoryAssertionFailure")
+                failure_el.text = (
+                    f"Query: {_truncate(eval_result.query, 500)}\n"
+                    f"Observed tool calls: "
+                    f"{' -> '.join(trajectory_result.observed_calls) or '(none)'}\n"
+                    f"Failed checks:\n{_truncate(failed_details, 1000)}"
+                )
+            elif judge_score is None and trajectory_result is None:
                 skipped += 1
                 skipped_el = ET.SubElement(testcase, "skipped")
                 skipped_el.set(
                     "message",
                     "No judge score available (judging disabled or judge failed)",
                 )
-            elif judge_score.score < self.fail_under:
+            elif judge_score is not None and judge_score.score < self.fail_under:
                 failures += 1
                 failure_el = ET.SubElement(testcase, "failure")
                 failure_el.set(
@@ -167,6 +194,16 @@ class JUnitXMLExporter(BaseExporter):
                 out_lines.append(f"judge_score: {judge_score.score}")
                 out_lines.append(
                     f"judge_explanation: {_truncate(judge_score.explanation, 500)}"
+                )
+            if trajectory_result is not None:
+                passed_count = sum(1 for c in trajectory_result.checks if c.passed)
+                out_lines.append(
+                    f"trajectory_assertions: {passed_count}/"
+                    f"{len(trajectory_result.checks)} passed"
+                )
+                out_lines.append(
+                    "observed_tool_calls: "
+                    f"{' -> '.join(trajectory_result.observed_calls) or '(none)'}"
                 )
             system_out.text = "\n".join(out_lines)
 

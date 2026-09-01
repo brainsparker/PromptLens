@@ -74,6 +74,22 @@ def _check_fail_under(result: "RunResult", fail_under: float) -> list:
     return failing
 
 
+def _collect_assertion_failures(result: "RunResult") -> list:
+    """Return evaluation results whose trajectory assertions failed.
+
+    Args:
+        result: The completed run result
+
+    Returns:
+        List of EvaluationResult objects with a failed trajectory result
+    """
+    return [
+        r
+        for r in result.results
+        if r.trajectory_result is not None and not r.trajectory_result.passed
+    ]
+
+
 def setup_logging(level: str = "INFO") -> None:
     """Set up logging configuration.
 
@@ -130,12 +146,22 @@ def cli(log_level: str) -> None:
         "failure threshold used by the junit export format."
     ),
 )
+@click.option(
+    "--fail-on-assertions",
+    is_flag=True,
+    help=(
+        "Quality gate for CI: exit with code 2 if any test case's trajectory "
+        "assertions failed. Deterministic, so it never flakes on judge "
+        "variance."
+    ),
+)
 def run(
     config: str,
     golden_set: Optional[str],
     output_dir: Optional[str],
     dry_run: bool,
     fail_under: Optional[float],
+    fail_on_assertions: bool,
 ) -> None:
     """Run evaluation with the given configuration file.
 
@@ -146,6 +172,7 @@ def run(
         promptlens run config.yaml --output-dir ./results
         promptlens run config.yaml --dry-run
         promptlens run config.yaml --fail-under 3.5
+        promptlens run config.yaml --fail-on-assertions
     """
     try:
         # Load config
@@ -219,6 +246,30 @@ def run(
             html_path = run_output_dir / "report.html"
             console.print(f"\n[cyan]View report: file://{html_path.absolute()}[/cyan]")
 
+        # Assertion gate for CI (checked first: deterministic, never flaky)
+        gate_failed = False
+        if fail_on_assertions:
+            assertion_failures = _collect_assertion_failures(result)
+            if assertion_failures:
+                console.print(
+                    "\n[bold red]✗ Assertion gate failed "
+                    "(--fail-on-assertions):[/bold red]"
+                )
+                for eval_result in assertion_failures:
+                    failed_checks = eval_result.trajectory_result.failed_checks
+                    console.print(
+                        f"  {eval_result.test_case_id} "
+                        f"({eval_result.model_response.model}):"
+                    )
+                    for check in failed_checks:
+                        console.print(f"    - {check.detail}")
+                gate_failed = True
+            else:
+                console.print(
+                    "\n[bold green]✓ Assertion gate passed "
+                    "(--fail-on-assertions)[/bold green]"
+                )
+
         # Quality gate for CI
         if fail_under is not None:
             failing_models = _check_fail_under(result, fail_under)
@@ -229,10 +280,15 @@ def run(
                 for model, avg in failing_models:
                     avg_display = f"{avg:.2f}" if avg is not None else "no scores"
                     console.print(f"  {model}: average judge score {avg_display}")
-                sys.exit(2)
-            console.print(
-                f"\n[bold green]✓ Quality gate passed (--fail-under {fail_under:g})[/bold green]"
-            )
+                gate_failed = True
+            else:
+                console.print(
+                    f"\n[bold green]✓ Quality gate passed "
+                    f"(--fail-under {fail_under:g})[/bold green]"
+                )
+
+        if gate_failed:
+            sys.exit(2)
 
     except Exception as e:
         console.print(f"\n[bold red]Error:[/bold red] {e}")

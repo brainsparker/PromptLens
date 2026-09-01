@@ -5,6 +5,7 @@ from typing import Any, Dict, List, Optional
 from pydantic import BaseModel, ConfigDict, Field
 
 from promptlens.models.tools import ToolDefinition, ExpectedToolCall
+from promptlens.models.trajectory import TrajectoryAssertions
 
 
 class TestCase(BaseModel):
@@ -22,6 +23,8 @@ class TestCase(BaseModel):
         expected_tool_calls: Expected tool calls the LLM should make
         evaluation_mode: Evaluation mode (standard/tool_only/tool_and_answer)
         tool_execution: Whether to actually execute tools (default: False)
+        trajectory: Deterministic assertions over the tool calls in the
+            response, evaluated locally with zero LLM calls
     """
 
     id: str
@@ -48,6 +51,14 @@ class TestCase(BaseModel):
     tool_execution: bool = Field(
         default=False,
         description="Whether to actually execute tools (default: False, evaluation only)"
+    )
+    trajectory: Optional[TrajectoryAssertions] = Field(
+        default=None,
+        description=(
+            "Deterministic assertions over the tool calls in the response "
+            "(must_call, must_not_call, call_order, max_calls, allow_other_calls). "
+            "Evaluated locally with zero LLM calls."
+        )
     )
 
     model_config = ConfigDict(json_schema_extra={

@@ -16,6 +16,7 @@ from rich.progress import (
     TimeElapsedColumn,
 )
 
+from promptlens.assertions import evaluate_trajectory
 from promptlens.judges.llm_judge import LLMJudge
 from promptlens.loaders.yaml_loader import get_loader
 from promptlens.models.config import RunConfig
@@ -215,6 +216,21 @@ class Runner:
                 timeout_seconds=self.config.execution.timeout_seconds,
             )
 
+            # Evaluate trajectory assertions (deterministic, no LLM calls)
+            trajectory_result = None
+            if test_case.trajectory is not None and not model_response.error:
+                trajectory_result = evaluate_trajectory(
+                    test_case.trajectory, model_response.tool_calls
+                )
+                if not trajectory_result.passed:
+                    failed = "; ".join(
+                        check.detail for check in trajectory_result.failed_checks
+                    )
+                    logger.warning(
+                        f"Trajectory assertions failed for test case "
+                        f"'{test_case.id}' ({model_response.model}): {failed}"
+                    )
+
             # Judge the response (only if generation succeeded)
             judge_score = None
             if not model_response.error:
@@ -232,6 +248,7 @@ class Runner:
                 expected_behavior=test_case.expected_behavior,
                 model_response=model_response,
                 judge_score=judge_score,
+                trajectory_result=trajectory_result,
                 timestamp=datetime.utcnow(),
             )
 
@@ -252,6 +269,17 @@ class Runner:
             console.print(f"[bold]{model}[/bold]")
             if avg_score is not None:
                 console.print(f"  Average Score: {avg_score:.2f}/5.0")
+            asserted = [
+                r for r in result.results
+                if r.model_response.model == model and r.trajectory_result is not None
+            ]
+            if asserted:
+                passed = sum(1 for r in asserted if r.trajectory_result.passed)
+                color = "green" if passed == len(asserted) else "red"
+                console.print(
+                    f"  Trajectory Assertions: "
+                    f"[{color}]{passed}/{len(asserted)} passed[/{color}]"
+                )
             console.print(f"  Total Cost: ${total_cost:.4f}")
             console.print(f"  Total Time: {total_latency:.0f}ms")
             console.print()

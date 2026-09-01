@@ -6,6 +6,7 @@ from typing import Any, Dict, List, Optional
 from pydantic import BaseModel, Field
 
 from promptlens.models.tools import ToolCall, ToolCallEvaluation
+from promptlens.models.trajectory import TrajectoryResult
 
 
 class ModelResponse(BaseModel):
@@ -94,6 +95,8 @@ class EvaluationResult(BaseModel):
         expected_behavior: What was expected
         model_response: The model's response with metadata
         judge_score: Score from the judge (if judging was performed)
+        trajectory_result: Deterministic trajectory assertion outcome
+            (if the test case configured trajectory assertions)
         timestamp: When the evaluation was performed
     """
 
@@ -102,6 +105,7 @@ class EvaluationResult(BaseModel):
     expected_behavior: str
     model_response: ModelResponse
     judge_score: Optional[JudgeScore] = None
+    trajectory_result: Optional[TrajectoryResult] = None
     timestamp: datetime = Field(default_factory=datetime.utcnow)
 
 
