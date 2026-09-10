@@ -48,8 +48,26 @@ class ModelResponse(BaseModel):
     )
 
 
+class AssertionResult(BaseModel):
+    """Outcome of one deterministic assertion against a response.
+
+    Attributes:
+        type: Assertion type (contains, regex, is_json, token_f1, ...)
+        label: Human-readable label for reports
+        passed: Whether the assertion held
+        detail: Short explanation of the outcome
+        score: Numeric score for scored assertions such as token_f1 (0.0-1.0)
+    """
+
+    type: str
+    label: str
+    passed: bool
+    detail: str = ""
+    score: Optional[float] = None
+
+
 class JudgeScore(BaseModel):
-    """Score from LLM judge.
+    """Score from a judge (LLM-as-judge or deterministic).
 
     Attributes:
         score: Integer score from 1-5
@@ -61,6 +79,7 @@ class JudgeScore(BaseModel):
         tool_evaluations: Detailed evaluation of each tool call (if applicable)
         tool_usage_score: Overall score for tool usage correctness (1-5)
         tool_efficiency_score: Score for tool usage efficiency (1-5)
+        assertion_results: Outcomes of the test case's deterministic assertions
     """
 
     score: int = Field(..., ge=1, le=5)  # Must be 1-5
@@ -69,6 +88,22 @@ class JudgeScore(BaseModel):
     judge_model: str
     judge_provider: str
     timestamp: datetime = Field(default_factory=datetime.utcnow)
+
+    # Deterministic assertion results (optional, for backward compatibility)
+    assertion_results: List[AssertionResult] = Field(
+        default_factory=list,
+        description="Results of deterministic assertions declared on the test case",
+    )
+
+    @property
+    def failed_assertions(self) -> List[AssertionResult]:
+        """Assertions that did not hold."""
+        return [a for a in self.assertion_results if not a.passed]
+
+    @property
+    def assertions_passed(self) -> bool:
+        """True when every recorded assertion held (vacuously true if none)."""
+        return not self.failed_assertions
 
     # Tool evaluation fields (optional, for backward compatibility)
     tool_evaluations: List[ToolCallEvaluation] = Field(
@@ -162,6 +197,43 @@ class RunResult(BaseModel):
         return sum(
             r.model_response.cost_usd or 0.0 for r in filtered_results
         )
+
+    def get_assertion_summary(self, model: Optional[str] = None) -> Dict[str, int]:
+        """Count deterministic assertion outcomes for a model or all models.
+
+        Args:
+            model: Optional model name to filter by
+
+        Returns:
+            Dict with "passed", "failed", and "total" assertion counts, plus
+            "cases_failed": the number of evaluations with at least one failure
+        """
+        filtered_results = self.results
+        if model:
+            filtered_results = [r for r in self.results if r.model_response.model == model]
+
+        passed = 0
+        failed = 0
+        cases_failed = 0
+        for r in filtered_results:
+            if not r.judge_score or not r.judge_score.assertion_results:
+                continue
+            case_failed = 0
+            for a in r.judge_score.assertion_results:
+                if a.passed:
+                    passed += 1
+                else:
+                    failed += 1
+                    case_failed += 1
+            if case_failed:
+                cases_failed += 1
+
+        return {
+            "passed": passed,
+            "failed": failed,
+            "total": passed + failed,
+            "cases_failed": cases_failed,
+        }
 
     def get_total_latency(self, model: Optional[str] = None) -> float:
         """Calculate total latency for a specific model or all models.

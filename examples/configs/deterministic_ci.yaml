@@ -1,0 +1,34 @@
+# Deterministic CI configuration
+#
+# Scores every response from the assertions declared in the golden set.
+# No judge model, no judge API key, identical scores on every run.
+# Pair with --fail-on-assertion to block a merge on any failed assertion:
+#
+#   promptlens run examples/configs/deterministic_ci.yaml --fail-on-assertion
+#
+# Test cases without assertions are left unscored (reported as skipped in
+# junit.xml) rather than given a placeholder score.
+
+golden_set: ./examples/golden_sets/customer_support_assertions.yaml
+
+models:
+  - name: "Claude 3.5 Sonnet"
+    provider: anthropic
+    model: claude-3-5-sonnet-20241022
+    temperature: 0.0
+    max_tokens: 1024
+
+judge:
+  type: deterministic
+
+execution:
+  parallel_requests: 3
+  retry_attempts: 3
+  timeout_seconds: 60
+
+output:
+  directory: ./promptlens_results
+  formats:
+    - json
+    - junit
+  run_name: "Customer Support - Deterministic CI Gate"

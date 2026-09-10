@@ -7,6 +7,8 @@ evaluated golden-set entry.
 
 Mapping rules:
     - A test case whose model response errored is reported as an <error>.
+    - A test case with any failing deterministic assertion is reported as a
+      <failure> of type AssertionFailed, regardless of judge score.
     - A test case whose judge score is below the failure threshold is
       reported as a <failure>.
     - A test case that was never judged (judging disabled or judge failed)
@@ -140,6 +142,22 @@ class JUnitXMLExporter(BaseExporter):
                     "message",
                     "No judge score available (judging disabled or judge failed)",
                 )
+            elif judge_score.failed_assertions:
+                failures += 1
+                failed = judge_score.failed_assertions
+                failure_el = ET.SubElement(testcase, "failure")
+                failure_el.set(
+                    "message",
+                    f"{len(failed)} of {len(judge_score.assertion_results)} "
+                    "assertion(s) failed",
+                )
+                failure_el.set("type", "AssertionFailed")
+                failure_el.text = (
+                    f"Query: {_truncate(eval_result.query, 500)}\n"
+                    f"Expected: {_truncate(eval_result.expected_behavior, 500)}\n"
+                    f"Score: {judge_score.score}\n"
+                    + "\n".join(f"FAIL {a.label}: {a.detail}" for a in failed)
+                )
             elif judge_score.score < self.fail_under:
                 failures += 1
                 failure_el = ET.SubElement(testcase, "failure")
@@ -168,6 +186,11 @@ class JUnitXMLExporter(BaseExporter):
                 out_lines.append(
                     f"judge_explanation: {_truncate(judge_score.explanation, 500)}"
                 )
+                if judge_score.assertion_results:
+                    passed = sum(1 for a in judge_score.assertion_results if a.passed)
+                    out_lines.append(
+                        f"assertions: {passed}/{len(judge_score.assertion_results)} passed"
+                    )
             system_out.text = "\n".join(out_lines)
 
         suite.set("tests", str(len(model_results)))
@@ -188,6 +211,10 @@ class JUnitXMLExporter(BaseExporter):
         _add_property(
             properties, "total_cost_usd", f"{result.get_total_cost(model):.6f}"
         )
+        assertions = result.get_assertion_summary(model)
+        if assertions["total"]:
+            _add_property(properties, "assertions_passed", str(assertions["passed"]))
+            _add_property(properties, "assertions_total", str(assertions["total"]))
         _add_property(properties, "fail_under", f"{self.fail_under:g}")
         suite.insert(0, properties)
 

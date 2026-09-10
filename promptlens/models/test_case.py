@@ -4,6 +4,7 @@ from typing import Any, Dict, List, Optional
 
 from pydantic import BaseModel, ConfigDict, Field
 
+from promptlens.models.assertions import Assertion
 from promptlens.models.tools import ToolDefinition, ExpectedToolCall
 
 
@@ -22,6 +23,9 @@ class TestCase(BaseModel):
         expected_tool_calls: Expected tool calls the LLM should make
         evaluation_mode: Evaluation mode (standard/tool_only/tool_and_answer)
         tool_execution: Whether to actually execute tools (default: False)
+        assertions: Deterministic checks (contains, regex, is_json, token_f1, ...)
+            evaluated without an LLM. Used by the deterministic judge and the
+            --fail-on-assertion CI gate; also recorded alongside LLM judge scores.
     """
 
     id: str
@@ -31,6 +35,10 @@ class TestCase(BaseModel):
     tags: List[str] = Field(default_factory=list)
     metadata: Dict[str, Any] = Field(default_factory=dict)
     reference_answer: Optional[str] = None
+    assertions: List[Assertion] = Field(
+        default_factory=list,
+        description="Deterministic checks on the response that need no LLM to evaluate",
+    )
 
     # Tool calling evaluation fields (optional, for backward compatibility)
     tools: List[ToolDefinition] = Field(

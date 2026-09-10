@@ -53,6 +53,28 @@ def _remove_path_if_exists(path: Path) -> None:
         shutil.rmtree(path)
 
 
+def _check_assertion_failures(result: "RunResult") -> list:
+    """Collect evaluations whose deterministic assertions did not all pass.
+
+    Args:
+        result: Completed run result
+
+    Returns:
+        List of (model, test_case_id, failed_assertion_results) tuples, in
+        result order. Empty when every recorded assertion held.
+    """
+    failures = []
+    for eval_result in result.results:
+        judge_score = eval_result.judge_score
+        if judge_score is None:
+            continue
+        failed = judge_score.failed_assertions
+        if failed:
+            model = eval_result.model_response.model
+            failures.append((model, eval_result.test_case_id, failed))
+    return failures
+
+
 def _check_fail_under(result: "RunResult", fail_under: float) -> list:
     """Return models whose average judge score falls below the gate.
 
@@ -130,12 +152,22 @@ def cli(log_level: str) -> None:
         "failure threshold used by the junit export format."
     ),
 )
+@click.option(
+    "--fail-on-assertion",
+    is_flag=True,
+    help=(
+        "Deterministic gate for CI: exit with code 2 if any test case's "
+        "assertions (contains, regex, is_json, token_f1, ...) fail. Works with "
+        "both the llm and deterministic judge types."
+    ),
+)
 def run(
     config: str,
     golden_set: Optional[str],
     output_dir: Optional[str],
     dry_run: bool,
     fail_under: Optional[float],
+    fail_on_assertion: bool,
 ) -> None:
     """Run evaluation with the given configuration file.
 
@@ -146,6 +178,7 @@ def run(
         promptlens run config.yaml --output-dir ./results
         promptlens run config.yaml --dry-run
         promptlens run config.yaml --fail-under 3.5
+        promptlens run config.yaml --fail-on-assertion
     """
     try:
         # Load config
@@ -219,20 +252,45 @@ def run(
             html_path = run_output_dir / "report.html"
             console.print(f"\n[cyan]View report: file://{html_path.absolute()}[/cyan]")
 
+        # Deterministic gate for CI: any failed assertion fails the build
+        gate_failed = False
+        if fail_on_assertion:
+            assertion_failures = _check_assertion_failures(result)
+            if assertion_failures:
+                gate_failed = True
+                console.print(
+                    f"\n[bold red]✗ Assertion gate failed (--fail-on-assertion): "
+                    f"{len(assertion_failures)} evaluation(s) with failing assertions[/bold red]"
+                )
+                for model, test_case_id, failed in assertion_failures:
+                    console.print(f"  {model} / {test_case_id}:")
+                    for assertion in failed:
+                        console.print(f"    - {assertion.label}: {assertion.detail}")
+            else:
+                summary = result.get_assertion_summary()
+                console.print(
+                    f"\n[bold green]✓ Assertion gate passed (--fail-on-assertion): "
+                    f"{summary['passed']}/{summary['total']} assertions held[/bold green]"
+                )
+
         # Quality gate for CI
         if fail_under is not None:
             failing_models = _check_fail_under(result, fail_under)
             if failing_models:
+                gate_failed = True
                 console.print(
                     f"\n[bold red]✗ Quality gate failed (--fail-under {fail_under:g}):[/bold red]"
                 )
                 for model, avg in failing_models:
                     avg_display = f"{avg:.2f}" if avg is not None else "no scores"
                     console.print(f"  {model}: average judge score {avg_display}")
-                sys.exit(2)
-            console.print(
-                f"\n[bold green]✓ Quality gate passed (--fail-under {fail_under:g})[/bold green]"
-            )
+            else:
+                console.print(
+                    f"\n[bold green]✓ Quality gate passed (--fail-under {fail_under:g})[/bold green]"
+                )
+
+        if gate_failed:
+            sys.exit(2)
 
     except Exception as e:
         console.print(f"\n[bold red]Error:[/bold red] {e}")

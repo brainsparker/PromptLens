@@ -404,6 +404,37 @@ The judge isn't perfect! If you see unexpected scores:
 - Adjust expectations if they were unclear
 - Try a different judge model if needed
 
+### 5b. Add Deterministic Assertions for CI
+
+Judge scores drift a little between identical runs, which makes them a poor
+merge gate. For the parts of a response you can decide mechanically (a phrase
+that must appear, a format that must parse, a length cap), add `assertions` to
+the test case. They run without a judge model and give the same answer every time:
+
+```yaml
+  - id: "refund-001"
+    query: "What's your refund policy?"
+    expected_behavior: "Explain the 30-day refund policy"
+    assertions:
+      - type: contains
+        value: "30 days"
+      - type: not_contains
+        value: "I don't know"
+        case_sensitive: false
+```
+
+Then gate CI on them:
+
+```bash
+# Assertions alongside the LLM judge
+python3 -m promptlens run config.yaml --fail-on-assertion
+
+# Assertions only: set judge.type: deterministic in config, no judge API key needed
+python3 -m promptlens run examples/configs/deterministic_ci.yaml --fail-on-assertion
+```
+
+The README's "Deterministic Assertions" section lists every assertion type.
+
 ### 6. Track Runs Over Time
 
 ```bash
@@ -672,7 +703,10 @@ A: Depends on model and test count. Typical costs:
 A: Yes! Use `custom_prompt` in judge config (see README)
 
 **Q: Does it work offline?**
-A: For local models (Ollama) yes. For API providers, you need internet.
+A: For local models (Ollama) yes. For API providers, you need internet. With `judge.type: deterministic`, judging itself never touches the network.
+
+**Q: Can I gate CI without paying for a judge on every commit?**
+A: Yes. Add `assertions` to your test cases, set `judge.type: deterministic`, and run with `--fail-on-assertion`. No judge model or judge API key is used.
 
 **Q: Can I integrate with CI/CD?**
 A: Yes! See the CI/CD workflow example above.
