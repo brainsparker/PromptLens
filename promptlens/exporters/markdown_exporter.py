@@ -105,8 +105,8 @@ class MarkdownExporter(BaseExporter):
             lines.append("")
 
             # Results table
-            lines.append("| Model | Score | Latency | Cost | Response |")
-            lines.append("|-------|-------|---------|------|----------|")
+            lines.append("| Model | Score | Assertions | Latency | Cost | Response |")
+            lines.append("|-------|-------|------------|---------|------|----------|")
 
             for eval_result in evals:
                 score = (
@@ -114,14 +114,26 @@ class MarkdownExporter(BaseExporter):
                     if eval_result.judge_score
                     else "N/A"
                 )
+                assertion_results = (
+                    eval_result.judge_score.assertion_results
+                    if eval_result.judge_score
+                    else []
+                )
+                if assertion_results:
+                    passed_count = sum(1 for a in assertion_results if a.passed)
+                    assertions = f"{passed_count}/{len(assertion_results)}"
+                else:
+                    assertions = "-"
                 latency = f"{eval_result.model_response.latency_ms:.0f}ms"
                 cost = f"${eval_result.model_response.cost_usd:.4f}" if eval_result.model_response.cost_usd else "$0.00"
                 response = eval_result.model_response.content[:100].replace("\n", " ")
                 if eval_result.model_response.error:
                     response = f"ERROR: {eval_result.model_response.error}"
 
+                model_name = eval_result.model_response.model
                 lines.append(
-                    f"| {eval_result.model_response.model} | {score} | {latency} | {cost} | {response}... |"
+                    f"| {model_name} | {score} | {assertions} | {latency} | {cost} | "
+                    f"{response}... |"
                 )
 
             lines.append("")

@@ -74,6 +74,12 @@
   .response .stats { margin-left: auto; font-size: 12px; color: var(--muted); font-family: ui-monospace, SFMono-Regular, Menlo, monospace; }
   .response .content { font-size: 14px; white-space: pre-wrap; }
   .response .judge { margin-top: 8px; padding-top: 8px; border-top: 1px dashed var(--border); font-size: 13px; color: var(--muted); }
+  .response .assertions { list-style: none; margin: 8px 0 0; padding: 0; font-size: 13px; }
+  .response .assertions li { padding: 2px 0; }
+  .response .assertions .mark { display: inline-block; min-width: 38px; font-weight: 600; font-size: 11px; letter-spacing: 0.02em; }
+  .response .assertions .pass .mark { color: #15803d; }
+  .response .assertions .fail .mark { color: #b91c1c; }
+  .response .assertions .detail { color: var(--muted); }
   .response .error { color: var(--score-1); font-size: 13px; margin-top: 6px; }
 
   .badge {
@@ -171,6 +177,13 @@
     <div class="error">Error: {{ r.error }}</div>
     {% else %}
     <div class="content">{{ r.response }}</div>
+    {% endif %}
+    {% if r.assertions %}
+    <ul class="assertions">
+      {% for a in r.assertions %}
+      <li class="{{ 'pass' if a.passed else 'fail' }}"><span class="mark">{{ 'PASS' if a.passed else 'FAIL' }}</span> {{ a.label }} <span class="detail">{{ a.detail }}</span></li>
+      {% endfor %}
+    </ul>
     {% endif %}
     <div class="judge">{{ r.explanation }}</div>
   </div>

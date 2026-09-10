@@ -16,7 +16,8 @@ from rich.progress import (
     TimeElapsedColumn,
 )
 
-from promptlens.judges.llm_judge import LLMJudge
+from promptlens.judges.assertions import evaluate_assertions
+from promptlens.judges.factory import get_judge
 from promptlens.loaders.yaml_loader import get_loader
 from promptlens.models.config import RunConfig
 from promptlens.models.result import EvaluationResult, RunResult
@@ -44,8 +45,9 @@ class Runner:
         self.config = config
         self.run_id = str(uuid.uuid4())[:8]
 
-        # Initialize judge
-        self.judge = LLMJudge(config.judge)
+        # Initialize judge (LLM-as-judge by default, or deterministic assertions)
+        self.judge = get_judge(config.judge)
+        self._skipped_judging = 0
 
         # Initialize providers for each model
         self.providers: List[BaseProvider] = []
@@ -63,8 +65,13 @@ class Runner:
         if not self.providers:
             raise ValueError("No providers successfully initialized")
 
-        # Semaphore for rate limiting
-        self.semaphore = asyncio.Semaphore(config.execution.parallel_requests)
+        # Semaphore for rate limiting. Created lazily inside the running event
+        # loop (see _run_evaluations): on Python 3.9, asyncio.Semaphore binds to
+        # the loop current at construction time, and a Runner is normally built
+        # before asyncio.run() starts its own loop. Building it here made every
+        # evaluation past the first parallel_requests fail with "attached to a
+        # different loop".
+        self.semaphore: Optional[asyncio.Semaphore] = None
 
     async def run(self) -> RunResult:
         """Run the complete evaluation.
@@ -132,6 +139,9 @@ class Runner:
         """
         results: List[EvaluationResult] = []
 
+        # Bind the concurrency limiter to the loop that is actually running
+        self.semaphore = asyncio.Semaphore(self.config.execution.parallel_requests)
+
         # Calculate total tasks
         total_tasks = len(golden_set.test_cases) * len(self.providers)
 
@@ -176,6 +186,12 @@ class Runner:
         console.print(
             f"[green]✓[/green] Completed {len(valid_results)}/{total_tasks} evaluations\n"
         )
+        if self._skipped_judging:
+            console.print(
+                f"[yellow]Note:[/yellow] {self._skipped_judging} evaluation(s) left unscored "
+                f"because the {self.config.judge.type} judge cannot score test cases "
+                "without assertions. Add an 'assertions' list to those test cases.\n"
+            )
 
         return valid_results
 
@@ -197,6 +213,9 @@ class Runner:
         Returns:
             EvaluationResult
         """
+        if self.semaphore is None:
+            self.semaphore = asyncio.Semaphore(self.config.execution.parallel_requests)
+
         async with self.semaphore:
             # Check if tools are requested but provider doesn't support them
             if test_case.tools and not provider.supports_tools():
@@ -218,10 +237,29 @@ class Runner:
             # Judge the response (only if generation succeeded)
             judge_score = None
             if not model_response.error:
-                try:
-                    judge_score = await self.judge.evaluate(test_case, model_response)
-                except Exception as e:
-                    logger.error(f"Judge evaluation failed: {e}")
+                if not self.judge.can_evaluate(test_case):
+                    self._skipped_judging += 1
+                    logger.warning(
+                        f"Test case '{test_case.id}' skipped by the "
+                        f"{self.config.judge.type} judge (no assertions declared)"
+                    )
+                else:
+                    try:
+                        judge_score = await self.judge.evaluate(test_case, model_response)
+                    except Exception as e:
+                        logger.error(f"Judge evaluation failed: {e}")
+
+                # Deterministic assertions are recorded next to every judge's
+                # score, so an LLM-judged run still carries the pass/fail facts
+                # that --fail-on-assertion and the JUnit export act on.
+                if (
+                    judge_score is not None
+                    and test_case.assertions
+                    and not judge_score.assertion_results
+                ):
+                    judge_score.assertion_results = evaluate_assertions(
+                        test_case, model_response
+                    )
 
             # Update progress
             progress.update(task_id, advance=1)
@@ -252,6 +290,18 @@ class Runner:
             console.print(f"[bold]{model}[/bold]")
             if avg_score is not None:
                 console.print(f"  Average Score: {avg_score:.2f}/5.0")
+            assertions = result.get_assertion_summary(model)
+            if assertions["total"]:
+                color = "green" if assertions["failed"] == 0 else "red"
+                passed_text = f"{assertions['passed']}/{assertions['total']} passed"
+                console.print(
+                    f"  Assertions: [{color}]{passed_text}[/{color}]"
+                    + (
+                        f" ({assertions['cases_failed']} case(s) with failures)"
+                        if assertions["cases_failed"]
+                        else ""
+                    )
+                )
             console.print(f"  Total Cost: ${total_cost:.4f}")
             console.print(f"  Total Time: {total_latency:.0f}ms")
             console.print()

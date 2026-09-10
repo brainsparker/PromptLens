@@ -82,22 +82,40 @@ class ModelConfig(BaseModel):
         return value
 
 
+JUDGE_TYPES = ("llm", "deterministic")
+
+
 class JudgeConfig(BaseModel):
     """Configuration for the judge.
 
     Attributes:
-        provider: Provider for judge model
-        model: Model to use for judging
-        temperature: Sampling temperature
-        custom_prompt: Optional custom judge prompt template
-        criteria: List of criteria to evaluate
+        type: Judge type. "llm" (default) scores with LLM-as-judge and also
+            records any deterministic assertions declared on test cases.
+            "deterministic" scores purely from assertions: no judge model,
+            no API key, identical output on every run.
+        provider: Provider for judge model (llm type only)
+        model: Model to use for judging (llm type only)
+        temperature: Sampling temperature (llm type only)
+        custom_prompt: Optional custom judge prompt template (llm type only)
+        criteria: List of criteria to evaluate (llm type only)
     """
 
+    type: str = "llm"
     provider: str = "anthropic"
     model: str = "claude-3-5-sonnet-20241022"
     temperature: float = 0.3
     custom_prompt: Optional[str] = None
     criteria: List[str] = Field(default_factory=lambda: ["accuracy", "helpfulness"])
+
+    @field_validator("type")
+    @classmethod
+    def validate_type(cls, value: str) -> str:
+        normalized = value.strip().lower()
+        if normalized not in JUDGE_TYPES:
+            raise ValueError(
+                f"unsupported judge type '{value}'. Supported types: {', '.join(JUDGE_TYPES)}"
+            )
+        return normalized
 
 
 class ExecutionConfig(BaseModel):
@@ -160,7 +178,7 @@ class OutputConfig(BaseModel):
     @field_validator("formats")
     @classmethod
     def validate_formats(cls, value: List[str]) -> List[str]:
-        allowed = {"html", "json", "csv", "md"}
+        allowed = {"html", "json", "csv", "md", "junit"}
         normalized = [fmt.lower() for fmt in value]
         invalid = sorted({fmt for fmt in normalized if fmt not in allowed})
         if invalid:

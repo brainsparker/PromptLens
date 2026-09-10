@@ -18,6 +18,7 @@ PromptLens runs golden test sets against multiple models, scores outputs using L
 - **Multi-Provider Support** - Test Anthropic (Claude), OpenAI (GPT), Google (Gemini), You.com, and local models (Ollama, LM Studio)
 - **Tool/Function Calling Evaluation** - Test tool usage with automatic + LLM judge scoring across 5 criteria
 - **LLM-as-Judge Scoring** - Automated evaluation using another LLM with configurable criteria
+- **Deterministic Assertions** - Per-test-case checks (contains, regex, is_json, length, token F1) that run with no judge model and no API key, plus a `--fail-on-assertion` gate that blocks the build on any failure
 - **Cost & Latency Tracking** - Monitor per-query costs and response times across models
 - **Beautiful Reports** - Interactive HTML reports with charts, comparisons, and detailed results
 - **Multiple Export Formats** - HTML, JSON, CSV, Markdown, and JUnit XML outputs
@@ -288,6 +289,7 @@ models:
 
 ```yaml
 judge:
+  type: llm                         # llm (default) or deterministic
   provider: anthropic               # Provider for judge model
   model: claude-3-5-sonnet-20241022 # Judge model (typically Claude or GPT-4)
   temperature: 0.3                  # Lower for consistent scoring
@@ -296,6 +298,8 @@ judge:
     - helpfulness
     - safety
 ```
+
+With `type: deterministic` the provider, model, temperature, and criteria fields are ignored; scores come from each test case's `assertions` (see [Deterministic Assertions](#deterministic-assertions)).
 
 ### Execution
 
@@ -322,19 +326,79 @@ output:
 
 ---
 
+## Deterministic Assertions
+
+An LLM judge is the right tool for open-ended quality questions, and the wrong tool for a merge gate: it costs money on every commit and returns a slightly different number each run, so a threshold near the noise floor fails builds at random. Assertions cover the other half of the job. They are decidable checks on the response that need no model, cost nothing, and return the same answer every time.
+
+Declare them on any test case:
+
+```yaml
+test_cases:
+  - id: "refund-001"
+    query: "What's your refund policy?"
+    expected_behavior: "Explain the 30-day refund policy"
+    reference_answer: "Refunds are accepted within 30 days of purchase."
+    assertions:
+      - type: contains
+        value: "30 days"
+      - type: not_contains
+        value: "I don't know"
+        case_sensitive: false
+      - type: not_regex
+        value: "\\b(60|90) days\\b"
+        name: "does not invent a different window"
+      - type: token_f1          # compares against reference_answer
+        threshold: 0.4
+      - type: max_length
+        value: 800
+```
+
+| Type | Value | Passes when |
+|------|-------|-------------|
+| `equals` | string | Trimmed response equals the value |
+| `contains` / `not_contains` | string | Value is present / absent |
+| `starts_with` / `ends_with` | string | Trimmed response starts / ends with the value |
+| `regex` / `not_regex` | pattern | Pattern matches / does not match anywhere |
+| `is_json` | none | Response (or its fenced code block) parses as JSON |
+| `min_length` / `max_length` | integer | Character count is within the bound |
+| `token_f1` | string, optional | Token F1 against the value (or `reference_answer`) meets `threshold` (default 0.5) |
+
+Text types accept `case_sensitive: false`. Every assertion accepts an optional `name` shown in reports.
+
+Assertions run in two ways:
+
+1. **Alongside the LLM judge (default).** With `judge.type: llm`, every judged response also records its assertion results. Reports show them next to the judge explanation, and the JUnit export marks any failed assertion as a `failure` regardless of score.
+2. **As the judge.** Set `judge.type: deterministic` and PromptLens scores purely from assertions: all pass is 5, none pass is 1, partial passes scale linearly. No judge model runs and no judge API key is needed. Test cases without assertions are left unscored (skipped in JUnit) instead of being handed a placeholder score, so a partially annotated golden set reports only what it can measure.
+
+```yaml
+judge:
+  type: deterministic
+```
+
+Gate the build on assertions with `--fail-on-assertion` (exit code 2 on any failure):
+
+```bash
+promptlens run examples/configs/deterministic_ci.yaml --fail-on-assertion
+```
+
+The flag works with both judge types, so a common setup is: assertions gate every pull request for free, and the LLM judge with `--fail-under` runs on a schedule where its cost and variance are acceptable. See [`examples/golden_sets/customer_support_assertions.yaml`](examples/golden_sets/customer_support_assertions.yaml) for a full annotated golden set.
+
+---
+
 ## CI/CD Integration
 
 PromptLens speaks the language your CI system already understands: JUnit XML test reports and exit codes.
 
-Add `junit` to your output formats, then gate the build on judge scores:
+Add `junit` to your output formats, then gate the build on judge scores, on assertions, or both:
 
 ```bash
 promptlens run config.yaml --fail-under 3.5
+promptlens run config.yaml --fail-on-assertion
 ```
 
 - Each golden-set test case becomes a JUnit test case (one test suite per model).
-- A test case scoring below the threshold is reported as a failure, a model API error as an error, and an unjudged case as skipped.
-- If any model's average judge score falls below `--fail-under`, the command exits with code 2, failing the pipeline. Exit code 1 is reserved for run errors, so CI can tell quality regressions apart from infrastructure failures.
+- A test case with a failed assertion is reported as a failure of type `AssertionFailed`. A test case scoring below the threshold is reported as a failure, a model API error as an error, and an unjudged case as skipped.
+- If any model's average judge score falls below `--fail-under`, or any assertion fails under `--fail-on-assertion`, the command exits with code 2, failing the pipeline. Exit code 1 is reserved for run errors, so CI can tell quality regressions apart from infrastructure failures.
 
 Example GitHub Actions step:
 
@@ -657,6 +721,7 @@ class RuleBasedJudge(BaseJudge):
 - [x] JUnit XML export and `--fail-under` CI quality gate
 - [x] Parallel execution with retry logic
 - [x] Cross-run comparison with `--fail-on-regression` CI gate
+- [x] Deterministic assertions and `--fail-on-assertion` CI gate (no judge model required)
 - [ ] Multi-judge consensus scoring
 - [ ] Synthetic test case generation
 - [ ] Historical trend tracking across many runs

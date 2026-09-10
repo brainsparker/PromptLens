@@ -80,6 +80,7 @@ class HTMLExporter(BaseExporter):
                 "total_latency": total_latency,
                 "score_distribution": score_dist,
                 "result_count": len(model_results),
+                "assertions": result.get_assertion_summary(model),
             })
 
         # Group results by test case
@@ -106,6 +107,14 @@ class HTMLExporter(BaseExporter):
                     "latency_ms": eval_result.model_response.latency_ms,
                     "cost_usd": eval_result.model_response.cost_usd or 0.0,
                     "error": eval_result.model_response.error,
+                    "assertions": [
+                        {"label": a.label, "passed": a.passed, "detail": a.detail}
+                        for a in (
+                            eval_result.judge_score.assertion_results
+                            if eval_result.judge_score
+                            else []
+                        )
+                    ],
                 }
             )
 

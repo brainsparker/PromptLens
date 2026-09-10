@@ -70,6 +70,14 @@ class CSVExporter(BaseExporter):
                 "tokens_used": eval_result.model_response.tokens_used or 0,
                 "error": eval_result.model_response.error or "",
             }
+            assertion_results = (
+                eval_result.judge_score.assertion_results if eval_result.judge_score else []
+            )
+            row["assertions_passed"] = sum(1 for a in assertion_results if a.passed)
+            row["assertions_total"] = len(assertion_results)
+            row["failed_assertions"] = "; ".join(
+                a.label for a in assertion_results if not a.passed
+            )
             rows.append(row)
 
         return rows

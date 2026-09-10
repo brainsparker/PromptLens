@@ -33,6 +33,21 @@ class BaseJudge(ABC):
         """
         pass
 
+    def can_evaluate(self, test_case: TestCase) -> bool:
+        """Whether this judge can produce a score for the given test case.
+
+        The runner skips judging (leaving judge_score unset, reported as
+        skipped in JUnit output) when this returns False, rather than
+        inventing a score. Defaults to True.
+
+        Args:
+            test_case: The test case about to be judged
+
+        Returns:
+            True if evaluate() can score this test case
+        """
+        return True
+
     @property
     @abstractmethod
     def judge_model(self) -> str:
