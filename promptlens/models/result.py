@@ -85,6 +85,24 @@ class JudgeScore(BaseModel):
     )
 
 
+class BudgetViolation(BaseModel):
+    """A cost or latency budget that a response (or the whole run) exceeded.
+
+    Attributes:
+        kind: What was measured: "cost", "latency", or "total_cost"
+        scope: "case" for a single response, "run" for the whole run
+        limit: The configured ceiling
+        actual: The measured value
+        message: Human-readable one-line description
+    """
+
+    kind: str
+    scope: str = "case"
+    limit: float
+    actual: float
+    message: str
+
+
 class EvaluationResult(BaseModel):
     """Complete evaluation result for one test case + model.
 
@@ -95,6 +113,7 @@ class EvaluationResult(BaseModel):
         model_response: The model's response with metadata
         judge_score: Score from the judge (if judging was performed)
         timestamp: When the evaluation was performed
+        budget_violations: Cost or latency budgets this response exceeded
     """
 
     test_case_id: str
@@ -103,6 +122,15 @@ class EvaluationResult(BaseModel):
     model_response: ModelResponse
     judge_score: Optional[JudgeScore] = None
     timestamp: datetime = Field(default_factory=datetime.utcnow)
+    budget_violations: List[BudgetViolation] = Field(
+        default_factory=list,
+        description="Cost or latency budgets this response exceeded",
+    )
+
+    @property
+    def over_budget(self) -> bool:
+        """Return True when this response exceeded at least one budget."""
+        return bool(self.budget_violations)
 
 
 class RunResult(BaseModel):
@@ -118,6 +146,7 @@ class RunResult(BaseModel):
         total_cost_usd: Total cost across all requests
         total_time_ms: Total time for all requests
         metadata: Additional run metadata
+        budget_violations: Run-level budgets exceeded (for example total cost)
     """
 
     run_id: str
@@ -129,6 +158,30 @@ class RunResult(BaseModel):
     total_cost_usd: float = 0.0
     total_time_ms: float = 0.0
     metadata: Dict[str, Any] = Field(default_factory=dict)
+    budget_violations: List[BudgetViolation] = Field(
+        default_factory=list,
+        description="Run-level budgets exceeded (for example total cost)",
+    )
+
+    def get_over_budget_results(self, model: Optional[str] = None) -> List[EvaluationResult]:
+        """Return results that exceeded a case-level budget.
+
+        Args:
+            model: Optional model name to filter by
+
+        Returns:
+            Evaluation results with at least one budget violation
+        """
+        filtered_results = self.results
+        if model:
+            filtered_results = [r for r in self.results if r.model_response.model == model]
+
+        return [r for r in filtered_results if r.budget_violations]
+
+    @property
+    def has_budget_violations(self) -> bool:
+        """Return True when any case or run-level budget was exceeded."""
+        return bool(self.budget_violations) or any(r.budget_violations for r in self.results)
 
     def get_average_score(self, model: Optional[str] = None) -> Optional[float]:
         """Calculate average score for a specific model or all models.

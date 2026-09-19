@@ -9,6 +9,10 @@ Mapping rules:
     - A test case whose model response errored is reported as an <error>.
     - A test case whose judge score is below the failure threshold is
       reported as a <failure>.
+    - A test case whose response exceeded a cost or latency budget is
+      reported as a <failure> (type BudgetExceeded), even when unjudged.
+      When both the score and a budget fail, one <failure> carries both
+      reasons.
     - A test case that was never judged (judging disabled or judge failed)
       is reported as <skipped>, so CI does not report a false pass.
     - Everything else is a pass.
@@ -111,6 +115,7 @@ class JUnitXMLExporter(BaseExporter):
         failures = 0
         errors = 0
         skipped = 0
+        budget_violations = 0
         suite_time = 0.0
 
         provider = None
@@ -126,6 +131,9 @@ class JUnitXMLExporter(BaseExporter):
 
             response_error = eval_result.model_response.error
             judge_score = eval_result.judge_score
+            violations = eval_result.budget_violations
+            if violations:
+                budget_violations += 1
 
             if response_error:
                 errors += 1
@@ -133,28 +141,45 @@ class JUnitXMLExporter(BaseExporter):
                 error_el.set("message", _truncate(response_error, 300))
                 error_el.set("type", "ModelResponseError")
                 error_el.text = response_error
-            elif judge_score is None:
+            elif judge_score is None and not violations:
                 skipped += 1
                 skipped_el = ET.SubElement(testcase, "skipped")
                 skipped_el.set(
                     "message",
                     "No judge score available (judging disabled or judge failed)",
                 )
-            elif judge_score.score < self.fail_under:
-                failures += 1
-                failure_el = ET.SubElement(testcase, "failure")
-                failure_el.set(
-                    "message",
-                    f"Judge score {judge_score.score} is below "
-                    f"threshold {self.fail_under:g}",
-                )
-                failure_el.set("type", "JudgeScoreBelowThreshold")
-                failure_el.text = (
-                    f"Query: {_truncate(eval_result.query, 500)}\n"
-                    f"Expected: {_truncate(eval_result.expected_behavior, 500)}\n"
-                    f"Score: {judge_score.score}\n"
-                    f"Explanation: {_truncate(judge_score.explanation, 1000)}"
-                )
+            else:
+                failure_types = []
+                failure_messages = []
+                if judge_score is not None and judge_score.score < self.fail_under:
+                    failure_types.append("JudgeScoreBelowThreshold")
+                    failure_messages.append(
+                        f"Judge score {judge_score.score} is below "
+                        f"threshold {self.fail_under:g}"
+                    )
+                if violations:
+                    failure_types.append("BudgetExceeded")
+                    failure_messages.append(
+                        "Budget exceeded: " + "; ".join(v.message for v in violations)
+                    )
+
+                if failure_types:
+                    failures += 1
+                    failure_el = ET.SubElement(testcase, "failure")
+                    failure_el.set("message", _truncate("; ".join(failure_messages), 300))
+                    failure_el.set("type", ",".join(failure_types))
+                    body_lines = [
+                        f"Query: {_truncate(eval_result.query, 500)}",
+                        f"Expected: {_truncate(eval_result.expected_behavior, 500)}",
+                    ]
+                    if judge_score is not None:
+                        body_lines.append(f"Score: {judge_score.score}")
+                        body_lines.append(
+                            f"Explanation: {_truncate(judge_score.explanation, 1000)}"
+                        )
+                    for violation in violations:
+                        body_lines.append(f"Budget: {violation.message}")
+                    failure_el.text = "\n".join(body_lines)
 
             system_out = ET.SubElement(testcase, "system-out")
             out_lines = [
@@ -168,6 +193,8 @@ class JUnitXMLExporter(BaseExporter):
                 out_lines.append(
                     f"judge_explanation: {_truncate(judge_score.explanation, 500)}"
                 )
+            for violation in violations:
+                out_lines.append(f"budget_violation: {violation.message}")
             system_out.text = "\n".join(out_lines)
 
         suite.set("tests", str(len(model_results)))
@@ -189,6 +216,9 @@ class JUnitXMLExporter(BaseExporter):
             properties, "total_cost_usd", f"{result.get_total_cost(model):.6f}"
         )
         _add_property(properties, "fail_under", f"{self.fail_under:g}")
+        _add_property(properties, "budget_violations", str(budget_violations))
+        for violation in result.budget_violations:
+            _add_property(properties, f"run_budget_{violation.kind}", violation.message)
         suite.insert(0, properties)
 
         stats = {

@@ -2,7 +2,7 @@
 
 from typing import Any, Dict, List, Optional
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 from promptlens.models.tools import ToolDefinition, ExpectedToolCall
 
@@ -22,6 +22,8 @@ class TestCase(BaseModel):
         expected_tool_calls: Expected tool calls the LLM should make
         evaluation_mode: Evaluation mode (standard/tool_only/tool_and_answer)
         tool_execution: Whether to actually execute tools (default: False)
+        max_cost_usd: Optional per-response cost ceiling for this case (USD)
+        max_latency_ms: Optional per-response latency ceiling for this case (ms)
     """
 
     id: str
@@ -49,6 +51,24 @@ class TestCase(BaseModel):
         default=False,
         description="Whether to actually execute tools (default: False, evaluation only)"
     )
+
+    # Budget fields (optional). A case-level budget overrides the run-level
+    # default in the config's `budgets` section for this case only.
+    max_cost_usd: Optional[float] = Field(
+        default=None,
+        description="Fail this case when a single response costs more than this (USD)",
+    )
+    max_latency_ms: Optional[float] = Field(
+        default=None,
+        description="Fail this case when a single response takes longer than this (ms)",
+    )
+
+    @field_validator("max_cost_usd", "max_latency_ms")
+    @classmethod
+    def validate_budget_positive(cls, value: Optional[float]) -> Optional[float]:
+        if value is not None and value <= 0:
+            raise ValueError("budget limits must be greater than 0")
+        return value
 
     model_config = ConfigDict(json_schema_extra={
             "example": {

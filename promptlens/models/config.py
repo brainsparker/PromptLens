@@ -144,6 +144,46 @@ class ExecutionConfig(BaseModel):
         return value
 
 
+class BudgetConfig(BaseModel):
+    """Cost and latency budgets for a run.
+
+    Budgets never stop a run early. Every response is still generated and
+    judged, then checked against these limits. Violations are recorded on
+    the results, reported by every exporter, and turned into a CI failure
+    by `promptlens run --fail-on-budget`.
+
+    Attributes:
+        max_case_cost_usd: Default per-response cost ceiling (USD). A test
+            case's own `max_cost_usd` overrides it for that case.
+        max_case_latency_ms: Default per-response latency ceiling (ms). A test
+            case's own `max_latency_ms` overrides it for that case.
+        max_total_cost_usd: Ceiling for the whole run's cost across all
+            models and test cases (USD).
+    """
+
+    max_case_cost_usd: Optional[float] = None
+    max_case_latency_ms: Optional[float] = None
+    max_total_cost_usd: Optional[float] = None
+
+    @field_validator("max_case_cost_usd", "max_case_latency_ms", "max_total_cost_usd")
+    @classmethod
+    def validate_positive(cls, value: Optional[float]) -> Optional[float]:
+        if value is not None and value <= 0:
+            raise ValueError("budget limits must be greater than 0")
+        return value
+
+    def is_configured(self) -> bool:
+        """Return True when at least one run-level budget is set."""
+        return any(
+            limit is not None
+            for limit in (
+                self.max_case_cost_usd,
+                self.max_case_latency_ms,
+                self.max_total_cost_usd,
+            )
+        )
+
+
 class OutputConfig(BaseModel):
     """Configuration for output settings.
 
@@ -160,7 +200,7 @@ class OutputConfig(BaseModel):
     @field_validator("formats")
     @classmethod
     def validate_formats(cls, value: List[str]) -> List[str]:
-        allowed = {"html", "json", "csv", "md"}
+        allowed = {"html", "json", "csv", "md", "junit"}
         normalized = [fmt.lower() for fmt in value]
         invalid = sorted({fmt for fmt in normalized if fmt not in allowed})
         if invalid:
@@ -179,6 +219,7 @@ class RunConfig(BaseModel):
         judge: Judge configuration
         execution: Execution settings
         output: Output settings
+        budgets: Cost and latency budgets
     """
 
     golden_set: str
@@ -186,6 +227,7 @@ class RunConfig(BaseModel):
     judge: JudgeConfig = Field(default_factory=JudgeConfig)
     execution: ExecutionConfig = Field(default_factory=ExecutionConfig)
     output: OutputConfig = Field(default_factory=OutputConfig)
+    budgets: BudgetConfig = Field(default_factory=BudgetConfig)
 
     @model_validator(mode="after")
     def validate_models(self) -> "RunConfig":

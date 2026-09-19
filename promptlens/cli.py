@@ -14,6 +14,7 @@ from rich.console import Console
 from rich.logging import RichHandler
 
 from promptlens import __version__
+from promptlens.budgets import describe_violations
 from promptlens.comparison import DEFAULT_THRESHOLD, compare_runs, render_markdown
 from promptlens.exporters.csv_exporter import CSVExporter
 from promptlens.exporters.html_exporter import HTMLExporter
@@ -74,6 +75,15 @@ def _check_fail_under(result: "RunResult", fail_under: float) -> list:
     return failing
 
 
+def _golden_set_has_budgets(result: "RunResult") -> bool:
+    """Return True if the run's golden set declared any per-case budget.
+
+    The runner records the effective budgets in result metadata so the CLI
+    can warn when a budget gate was requested but nothing could ever fail it.
+    """
+    return bool(result.metadata.get("case_budgets_declared"))
+
+
 def setup_logging(level: str = "INFO") -> None:
     """Set up logging configuration.
 
@@ -130,12 +140,33 @@ def cli(log_level: str) -> None:
         "failure threshold used by the junit export format."
     ),
 )
+@click.option(
+    "--fail-on-budget",
+    is_flag=True,
+    help=(
+        "Budget gate for CI: exit with code 2 if any response exceeds its "
+        "cost or latency budget, or the run exceeds its total cost budget "
+        "(budgets come from the config's budgets section and per-case "
+        "max_cost_usd / max_latency_ms fields)."
+    ),
+)
+@click.option(
+    "--max-total-cost",
+    type=click.FloatRange(min=0.0, min_open=True),
+    default=None,
+    help=(
+        "Cap the whole run's cost in USD. Overrides budgets.max_total_cost_usd "
+        "from the config and implies --fail-on-budget."
+    ),
+)
 def run(
     config: str,
     golden_set: Optional[str],
     output_dir: Optional[str],
     dry_run: bool,
     fail_under: Optional[float],
+    fail_on_budget: bool,
+    max_total_cost: Optional[float],
 ) -> None:
     """Run evaluation with the given configuration file.
 
@@ -146,6 +177,8 @@ def run(
         promptlens run config.yaml --output-dir ./results
         promptlens run config.yaml --dry-run
         promptlens run config.yaml --fail-under 3.5
+        promptlens run config.yaml --fail-on-budget
+        promptlens run config.yaml --max-total-cost 0.50
     """
     try:
         # Load config
@@ -158,6 +191,12 @@ def run(
         if output_dir:
             config_data.setdefault("output", {})
             config_data["output"]["directory"] = output_dir
+        if max_total_cost is not None:
+            budgets_data = config_data.setdefault("budgets", {})
+            if not isinstance(budgets_data, dict):
+                raise ValueError("budgets must be a mapping")
+            budgets_data["max_total_cost_usd"] = max_total_cost
+            fail_on_budget = True
 
         # Parse config
         try:
@@ -219,20 +258,48 @@ def run(
             html_path = run_output_dir / "report.html"
             console.print(f"\n[cyan]View report: file://{html_path.absolute()}[/cyan]")
 
-        # Quality gate for CI
+        # CI gates. Both are evaluated and reported before exiting, so one
+        # CI run tells you everything that is wrong.
+        gate_failed = False
+
+        # Quality gate
         if fail_under is not None:
             failing_models = _check_fail_under(result, fail_under)
             if failing_models:
+                gate_failed = True
                 console.print(
                     f"\n[bold red]✗ Quality gate failed (--fail-under {fail_under:g}):[/bold red]"
                 )
                 for model, avg in failing_models:
                     avg_display = f"{avg:.2f}" if avg is not None else "no scores"
                     console.print(f"  {model}: average judge score {avg_display}")
-                sys.exit(2)
-            console.print(
-                f"\n[bold green]✓ Quality gate passed (--fail-under {fail_under:g})[/bold green]"
-            )
+            else:
+                console.print(
+                    f"\n[bold green]✓ Quality gate passed (--fail-under {fail_under:g})[/bold green]"
+                )
+
+        # Budget gate
+        if fail_on_budget:
+            violation_lines = describe_violations(result)
+            if violation_lines:
+                gate_failed = True
+                console.print(
+                    f"\n[bold red]✗ Budget gate failed (--fail-on-budget): "
+                    f"{len(violation_lines)} violation(s)[/bold red]"
+                )
+                for line in violation_lines:
+                    console.print(f"  {line}")
+            elif not run_config.budgets.is_configured() and not _golden_set_has_budgets(result):
+                console.print(
+                    "\n[yellow]Budget gate passed, but no budgets are configured. "
+                    "Set a budgets section in the config or max_cost_usd / "
+                    "max_latency_ms on test cases.[/yellow]"
+                )
+            else:
+                console.print("\n[bold green]✓ Budget gate passed (--fail-on-budget)[/bold green]")
+
+        if gate_failed:
+            sys.exit(2)
 
     except Exception as e:
         console.print(f"\n[bold red]Error:[/bold red] {e}")

@@ -22,6 +22,7 @@ PromptLens runs golden test sets against multiple models, scores outputs using L
 - **Beautiful Reports** - Interactive HTML reports with charts, comparisons, and detailed results
 - **Multiple Export Formats** - HTML, JSON, CSV, Markdown, and JUnit XML outputs
 - **CI-Native Quality Gates** - JUnit XML reports plus a `--fail-under` score gate that fails the build on quality regressions
+- **Cost & Latency Budgets** - Per-test-case and run-level ceilings for cost and latency, with a `--fail-on-budget` gate so a prompt change that doubles the bill fails CI even when the judge score holds
 - **Cross-Run Comparison** - Diff any two runs by test case and model with score, cost, and latency deltas, plus a `--fail-on-regression` CI gate
 - **Parallel Execution** - Async execution with configurable concurrency and retry logic
 - **Portable & Local** - No cloud backend, all data stays on your machine
@@ -161,6 +162,9 @@ promptlens run my_config.yaml
 ```bash
 # Run evaluation
 promptlens run <config.yaml>
+
+# Run with CI gates: judge score floor and cost/latency budgets
+promptlens run <config.yaml> --fail-under 3.5 --fail-on-budget
 
 # Validate a golden set
 promptlens validate <golden_set.yaml>
@@ -306,6 +310,28 @@ execution:
   timeout_seconds: 60               # Request timeout
 ```
 
+### Budgets
+
+```yaml
+budgets:
+  max_case_cost_usd: 0.02           # Default per-response cost ceiling (USD)
+  max_case_latency_ms: 8000         # Default per-response latency ceiling (ms)
+  max_total_cost_usd: 0.25          # Ceiling for the whole run
+```
+
+A test case can tighten or loosen its own limits, which override the defaults above for that case only:
+
+```yaml
+test_cases:
+  - id: "cs-001"
+    query: "How do I reset my password?"
+    expected_behavior: "Provide clear step-by-step instructions"
+    max_cost_usd: 0.01
+    max_latency_ms: 6000
+```
+
+Budgets never stop a run early: every response is still generated and judged, then checked. Violations are printed in the run summary, stored in `results.json`, listed in the Markdown and HTML reports, and reported as `BudgetExceeded` failures in JUnit XML. See [Cost and Latency Budgets](#cost-and-latency-budgets) for the CI gate.
+
 ### Output
 
 ```yaml
@@ -350,6 +376,28 @@ Example GitHub Actions step:
 ```
 
 The same `junit.xml` works with GitLab (`artifacts:reports:junit`), Jenkins, CircleCI, and any other JUnit-compatible report viewer.
+
+### Cost and Latency Budgets
+
+A judge score tells you whether answers are still good. It says nothing about the prompt tweak that made every answer 40 percent more expensive, or the model swap that pushed latency past what your product tolerates. Budgets make cost and latency pass/fail criteria next to the score.
+
+Set defaults in the config, override per test case where a query deserves a different limit, then gate CI:
+
+```bash
+promptlens run config.yaml --fail-on-budget
+```
+
+- A response that costs more than its `max_cost_usd`, or takes longer than its `max_latency_ms`, is a violation. A test case's own fields win over the `budgets` defaults.
+- A run whose total cost exceeds `budgets.max_total_cost_usd` is a violation.
+- With `--fail-on-budget`, any violation exits with code 2, the same code `--fail-under` and `compare --fail-on-regression` use, so CI can tell quality and budget failures apart from run errors (exit code 1). Both gates are evaluated and printed before exiting.
+- `--max-total-cost 0.50` caps the whole run from the command line, overrides the config value, and implies `--fail-on-budget`.
+- Errored responses are not budget-checked (they are already errors), and cost budgets are skipped when the provider reports no cost estimate (local models). Latency budgets always apply.
+
+In JUnit XML, an over-budget case is a `<failure type="BudgetExceeded">`; a case that also scored below `--fail-under` carries both reasons in one failure. Try it:
+
+```bash
+promptlens run examples/configs/budget_gate.yaml --fail-on-budget
+```
 
 ---
 
@@ -657,6 +705,7 @@ class RuleBasedJudge(BaseJudge):
 - [x] JUnit XML export and `--fail-under` CI quality gate
 - [x] Parallel execution with retry logic
 - [x] Cross-run comparison with `--fail-on-regression` CI gate
+- [x] Cost and latency budgets with `--fail-on-budget` CI gate
 - [ ] Multi-judge consensus scoring
 - [ ] Synthetic test case generation
 - [ ] Historical trend tracking across many runs

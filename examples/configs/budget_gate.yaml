@@ -1,0 +1,41 @@
+# Budget gate example
+# Runs the customer support golden set and records every response that
+# costs more or takes longer than the budgets below. Add --fail-on-budget
+# to turn a violation into a CI failure (exit code 2):
+#
+#   promptlens run examples/configs/budget_gate.yaml --fail-on-budget
+#
+# A test case can override the per-case defaults with its own
+# max_cost_usd / max_latency_ms fields (see cs-001 in the golden set).
+
+golden_set: ./examples/golden_sets/customer_support.yaml
+
+models:
+  - name: "Claude 3.5 Sonnet"
+    provider: anthropic
+    model: claude-3-5-sonnet-20241022
+    temperature: 0.7
+    max_tokens: 1024
+
+judge:
+  provider: anthropic
+  model: claude-3-5-sonnet-20241022
+  temperature: 0.3
+
+execution:
+  parallel_requests: 3
+  retry_attempts: 3
+  timeout_seconds: 60
+
+budgets:
+  max_case_cost_usd: 0.02       # no single response may cost more than 2 cents
+  max_case_latency_ms: 8000     # or take longer than 8 seconds
+  max_total_cost_usd: 0.25      # and the whole run stays under 25 cents
+
+output:
+  directory: ./promptlens_results
+  formats:
+    - html
+    - json
+    - junit
+  run_name: "Customer Support - Budget Gate"

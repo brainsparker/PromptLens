@@ -106,8 +106,13 @@ class HTMLExporter(BaseExporter):
                     "latency_ms": eval_result.model_response.latency_ms,
                     "cost_usd": eval_result.model_response.cost_usd or 0.0,
                     "error": eval_result.model_response.error,
+                    "budget_violations": [v.message for v in eval_result.budget_violations],
                 }
             )
+
+        budget_violation_count = sum(
+            1 for r in result.results if r.budget_violations
+        ) + len(result.budget_violations)
 
         return {
             "run_id": result.run_id,
@@ -121,6 +126,8 @@ class HTMLExporter(BaseExporter):
             "model_stats": model_stats,
             "test_cases": list(test_case_results.values()),
             "models": result.models_tested,
+            "budget_violation_count": budget_violation_count,
+            "run_budget_violations": [v.message for v in result.budget_violations],
         }
 
     @property
