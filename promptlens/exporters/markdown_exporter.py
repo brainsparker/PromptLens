@@ -4,6 +4,7 @@ import logging
 from pathlib import Path
 from typing import Optional
 
+from promptlens.budgets import describe_violations
 from promptlens.exporters.base import BaseExporter
 from promptlens.models.result import RunResult
 
@@ -63,7 +64,17 @@ class MarkdownExporter(BaseExporter):
             f"| Test Cases | {len(result.results) // len(result.models_tested)} |"
         )
         lines.append(f"| Models | {len(result.models_tested)} |")
+        if result.has_budget_violations:
+            lines.append(f"| Budget Violations | {len(describe_violations(result))} |")
         lines.append("")
+
+        # Budget violations, listed up front so a PR reviewer sees them first
+        if result.has_budget_violations:
+            lines.append("## Budget Violations")
+            lines.append("")
+            for line in describe_violations(result):
+                lines.append(f"- {line}")
+            lines.append("")
 
         # Per-model results
         lines.append("## Model Results")
@@ -119,6 +130,8 @@ class MarkdownExporter(BaseExporter):
                 response = eval_result.model_response.content[:100].replace("\n", " ")
                 if eval_result.model_response.error:
                     response = f"ERROR: {eval_result.model_response.error}"
+                if eval_result.budget_violations:
+                    cost = f"{cost} (over budget)"
 
                 lines.append(
                     f"| {eval_result.model_response.model} | {score} | {latency} | {cost} | {response}... |"

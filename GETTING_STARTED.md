@@ -309,6 +309,21 @@ models:
 
 4. Decide: Is a 0.3 point drop worth 10x cost savings?
 
+5. Lock the decision in with a budget so it cannot silently regress:
+
+```yaml
+budgets:
+  max_case_cost_usd: 0.01     # no single response over 1 cent
+  max_case_latency_ms: 5000   # or slower than 5 seconds
+  max_total_cost_usd: 0.50    # whole run under 50 cents
+```
+
+```bash
+promptlens run config.yaml --fail-on-budget
+```
+
+Every response is still generated and judged; responses over budget are flagged in the report, and the command exits with code 2 so CI fails. A test case can set its own `max_cost_usd` / `max_latency_ms` to override the defaults.
+
 ---
 
 ## Creating Good Test Cases
@@ -482,7 +497,8 @@ jobs:
       - name: Run Evaluation
         env:
           ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
-        run: python3 -m promptlens run tests/prompts.yaml
+        # Fail the build on low judge scores or blown cost/latency budgets
+        run: python3 -m promptlens run tests/prompts.yaml --fail-under 3.5 --fail-on-budget
       - name: Upload Report
         uses: actions/upload-artifact@v2
         with:

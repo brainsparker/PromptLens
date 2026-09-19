@@ -16,6 +16,7 @@ from rich.progress import (
     TimeElapsedColumn,
 )
 
+from promptlens.budgets import check_case_budget, check_run_budget, describe_violations
 from promptlens.judges.llm_judge import LLMJudge
 from promptlens.loaders.yaml_loader import get_loader
 from promptlens.models.config import RunConfig
@@ -110,8 +111,16 @@ class Runner:
                 "golden_set_path": self.config.golden_set,
                 "test_case_count": len(golden_set.test_cases),
                 "provider_count": len(self.providers),
+                "budgets": self.config.budgets.model_dump(exclude_none=True),
+                "case_budgets_declared": any(
+                    tc.max_cost_usd is not None or tc.max_latency_ms is not None
+                    for tc in golden_set.test_cases
+                ),
             },
         )
+
+        # Run-level budgets (total cost) are checked once everything is in
+        run_result.budget_violations = check_run_budget(run_result, self.config.budgets)
 
         # Print summary
         self._print_summary(run_result)
@@ -223,6 +232,12 @@ class Runner:
                 except Exception as e:
                     logger.error(f"Judge evaluation failed: {e}")
 
+            # Budgets are checked after judging so the report always has the
+            # full picture; a violation never short-circuits the run.
+            budget_violations = check_case_budget(
+                test_case, model_response, self.config.budgets
+            )
+
             # Update progress
             progress.update(task_id, advance=1)
 
@@ -233,6 +248,7 @@ class Runner:
                 model_response=model_response,
                 judge_score=judge_score,
                 timestamp=datetime.utcnow(),
+                budget_violations=budget_violations,
             )
 
     def _print_summary(self, result: RunResult) -> None:
@@ -262,3 +278,13 @@ class Runner:
         console.print(f"  Total Time: {result.total_time_ms:.0f}ms")
         console.print(f"  Test Cases: {len(result.results) // len(result.models_tested)}")
         console.print()
+
+        # Budgets
+        violation_lines = describe_violations(result)
+        if violation_lines:
+            console.print(f"[bold red]Budget violations ({len(violation_lines)})[/bold red]")
+            for line in violation_lines:
+                console.print(f"  [red]✗[/red] {line}")
+            console.print()
+        elif self.config.budgets.is_configured():
+            console.print("[green]✓[/green] All responses within budget\n")

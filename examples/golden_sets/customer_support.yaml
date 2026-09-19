@@ -8,6 +8,10 @@ test_cases:
     expected_behavior: "Provide clear step-by-step instructions for password reset, including where to find the reset link"
     category: "account_management"
     tags: ["password", "account", "security"]
+    # Optional per-case budgets. These override the run-level defaults in
+    # the config's budgets section (see examples/configs/budget_gate.yaml).
+    max_cost_usd: 0.01
+    max_latency_ms: 6000
 
   - id: "cs-002"
     query: "What's your refund policy?"
