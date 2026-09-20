@@ -61,6 +61,16 @@ class JudgeScore(BaseModel):
         tool_evaluations: Detailed evaluation of each tool call (if applicable)
         tool_usage_score: Overall score for tool usage correctness (1-5)
         tool_efficiency_score: Score for tool usage efficiency (1-5)
+        sample_scores: Every individual judge verdict when the judge was
+            sampled more than once. Empty for a single-sample judgement.
+        sample_explanations: The explanation attached to each sample, in the
+            same order as sample_scores.
+        score_mean: Mean of the sampled scores (None for a single sample)
+        score_std: Population standard deviation of the sampled scores
+        score_min: Lowest sampled score
+        score_max: Highest sampled score
+        disagreement: True when the sample spread reached the configured
+            disagreement range, meaning the judge did not agree with itself
     """
 
     score: int = Field(..., ge=1, le=5)  # Must be 1-5
@@ -69,6 +79,50 @@ class JudgeScore(BaseModel):
     judge_model: str
     judge_provider: str
     timestamp: datetime = Field(default_factory=datetime.utcnow)
+
+    # Judge stability fields (optional, populated when judge.samples > 1)
+    sample_scores: List[int] = Field(
+        default_factory=list,
+        description="Individual judge scores when the judge was sampled more than once",
+    )
+    sample_explanations: List[str] = Field(
+        default_factory=list,
+        description="Explanation for each judge sample, aligned with sample_scores",
+    )
+    score_mean: Optional[float] = Field(None, description="Mean of the sampled scores")
+    score_std: Optional[float] = Field(
+        None, description="Population standard deviation of the sampled scores"
+    )
+    score_min: Optional[int] = Field(None, ge=1, le=5, description="Lowest sampled score")
+    score_max: Optional[int] = Field(None, ge=1, le=5, description="Highest sampled score")
+    disagreement: bool = Field(
+        False,
+        description="True when the judge samples spread at least the disagreement range",
+    )
+
+    @property
+    def sample_count(self) -> int:
+        """Number of judge calls behind this score (1 when not sampled)."""
+        return len(self.sample_scores) if self.sample_scores else 1
+
+    @property
+    def is_sampled(self) -> bool:
+        """True when this score aggregates more than one judge call."""
+        return self.sample_count > 1
+
+    @property
+    def effective_score(self) -> float:
+        """Score to use in averages: the sample mean when available, else the score."""
+        if self.score_mean is not None:
+            return self.score_mean
+        return float(self.score)
+
+    @property
+    def score_range(self) -> int:
+        """Spread between the highest and lowest sample (0 when not sampled)."""
+        if self.score_min is None or self.score_max is None:
+            return 0
+        return self.score_max - self.score_min
 
     # Tool evaluation fields (optional, for backward compatibility)
     tool_evaluations: List[ToolCallEvaluation] = Field(
@@ -143,8 +197,17 @@ class RunResult(BaseModel):
         if model:
             filtered_results = [r for r in self.results if r.model_response.model == model]
 
-        scores = [r.judge_score.score for r in filtered_results if r.judge_score]
+        scores = [r.judge_score.effective_score for r in filtered_results if r.judge_score]
         return sum(scores) / len(scores) if scores else None
+
+    @property
+    def judge_samples(self) -> int:
+        """Judge samples per response used in this run (1 when not recorded)."""
+        value = self.metadata.get("judge_samples", 1)
+        try:
+            return max(1, int(value))
+        except (TypeError, ValueError):
+            return 1
 
     def get_total_cost(self, model: Optional[str] = None) -> float:
         """Calculate total cost for a specific model or all models.

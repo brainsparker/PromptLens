@@ -5,6 +5,10 @@ from urllib.parse import urlparse
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
+# Upper bound on judge samples per response. Judge calls are the most
+# expensive part of an eval run, so this guards against a typo like 100.
+MAX_JUDGE_SAMPLES = 25
+
 
 class ProviderConfig(BaseModel):
     """Configuration for a single provider.
@@ -91,6 +95,15 @@ class JudgeConfig(BaseModel):
         temperature: Sampling temperature
         custom_prompt: Optional custom judge prompt template
         criteria: List of criteria to evaluate
+        samples: Number of independent judge calls per response. With the
+            default of 1 the judge runs once, exactly as before. With N > 1
+            every response is judged N times and the samples are aggregated
+            into one score plus stability statistics (spread, standard
+            deviation, disagreement flag), so a single noisy verdict cannot
+            silently decide a CI gate.
+        disagreement_range: Minimum spread (max sample minus min sample, on
+            the 1-5 scale) at which a judged response is flagged as a judge
+            disagreement. Only meaningful when samples > 1.
     """
 
     provider: str = "anthropic"
@@ -98,6 +111,27 @@ class JudgeConfig(BaseModel):
     temperature: float = 0.3
     custom_prompt: Optional[str] = None
     criteria: List[str] = Field(default_factory=lambda: ["accuracy", "helpfulness"])
+    samples: int = 1
+    disagreement_range: int = 2
+
+    @field_validator("samples")
+    @classmethod
+    def validate_samples(cls, value: int) -> int:
+        if value < 1:
+            raise ValueError("judge samples must be at least 1")
+        if value > MAX_JUDGE_SAMPLES:
+            raise ValueError(
+                f"judge samples must be at most {MAX_JUDGE_SAMPLES} "
+                "(each sample is a separate judge API call per response)"
+            )
+        return value
+
+    @field_validator("disagreement_range")
+    @classmethod
+    def validate_disagreement_range(cls, value: int) -> int:
+        if not 1 <= value <= 4:
+            raise ValueError("disagreement_range must be between 1 and 4 on the 1-5 scale")
+        return value
 
 
 class ExecutionConfig(BaseModel):
@@ -160,7 +194,7 @@ class OutputConfig(BaseModel):
     @field_validator("formats")
     @classmethod
     def validate_formats(cls, value: List[str]) -> List[str]:
-        allowed = {"html", "json", "csv", "md"}
+        allowed = {"html", "json", "csv", "md", "junit"}
         normalized = [fmt.lower() for fmt in value]
         invalid = sorted({fmt for fmt in normalized if fmt not in allowed})
         if invalid:

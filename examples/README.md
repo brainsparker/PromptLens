@@ -44,6 +44,11 @@ Configuration files define how evaluations are run, including which models to te
    - Useful for cost-effective testing and privacy-sensitive use cases
    - Requires Ollama running locally
 
+4. **`judge_stability.yaml`** - Judge stability sampling
+   - Judges every response 3 times and reports the verdict spread and disagreements
+   - Pair with `--fail-under` and `--fail-on-judge-disagreement` for a CI gate that fails when the judge is unreliable
+   - Exports: HTML, JSON, CSV, JUnit (with stability columns and properties)
+
 ## Quick Start
 
 ### 1. Set up API keys

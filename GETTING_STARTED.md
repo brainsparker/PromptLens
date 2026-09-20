@@ -403,6 +403,7 @@ The judge isn't perfect! If you see unexpected scores:
 - Read the explanation
 - Adjust expectations if they were unclear
 - Try a different judge model if needed
+- Set `judge.samples: 3` (or pass `--judge-samples 3`) to judge each response several times and see how stable the verdicts are before trusting them in CI
 
 ### 6. Track Runs Over Time
 
@@ -517,6 +518,7 @@ python3 -m promptlens run config.yaml
 2. Try a different judge model
 3. Read judge explanations to understand reasoning
 4. Consider using a custom judge prompt
+5. Measure the judge itself: `promptlens run config.yaml --judge-samples 3` judges every response three times and reports the spread. If the same response scores 2 on one call and 5 on the next, the problem is judge noise, not your prompt. See `examples/configs/judge_stability.yaml`.
 
 ### It's slow
 
