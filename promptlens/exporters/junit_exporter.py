@@ -19,6 +19,7 @@ import xml.etree.ElementTree as ET
 from typing import List, Optional
 
 from promptlens.exporters.base import BaseExporter
+from promptlens.judges.stability import straddles_threshold
 from promptlens.models.result import EvaluationResult, RunResult
 
 logger = logging.getLogger(__name__)
@@ -168,6 +169,21 @@ class JUnitXMLExporter(BaseExporter):
                 out_lines.append(
                     f"judge_explanation: {_truncate(judge_score.explanation, 500)}"
                 )
+                if judge_score.is_sampled:
+                    out_lines.append(f"judge_samples: {judge_score.sample_count}")
+                    out_lines.append(
+                        "judge_score_samples: "
+                        + ",".join(str(s) for s in judge_score.sample_scores)
+                    )
+                    out_lines.append(f"judge_score_mean: {judge_score.score_mean:.3f}")
+                    out_lines.append(f"judge_score_std: {judge_score.score_std:.3f}")
+                    out_lines.append(
+                        f"judge_disagreement: {str(judge_score.disagreement).lower()}"
+                    )
+                    out_lines.append(
+                        "judge_gate_straddle: "
+                        + str(straddles_threshold(judge_score, self.fail_under)).lower()
+                    )
             system_out.text = "\n".join(out_lines)
 
         suite.set("tests", str(len(model_results)))
@@ -189,6 +205,21 @@ class JUnitXMLExporter(BaseExporter):
             properties, "total_cost_usd", f"{result.get_total_cost(model):.6f}"
         )
         _add_property(properties, "fail_under", f"{self.fail_under:g}")
+        if result.judge_samples > 1:
+            _add_property(properties, "judge_samples", str(result.judge_samples))
+            disagreements = sum(
+                1
+                for r in model_results
+                if r.judge_score is not None and r.judge_score.disagreement
+            )
+            straddles = sum(
+                1
+                for r in model_results
+                if r.judge_score is not None
+                and straddles_threshold(r.judge_score, self.fail_under)
+            )
+            _add_property(properties, "judge_disagreements", str(disagreements))
+            _add_property(properties, "judge_gate_straddles", str(straddles))
         suite.insert(0, properties)
 
         stats = {

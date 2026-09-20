@@ -85,6 +85,10 @@
   .badge.s3 { background: var(--score-3); }
   .badge.s4 { background: var(--score-4); }
   .badge.s5 { background: var(--score-5); }
+  .spread { font-size: 12px; color: #6b7280; font-variant-numeric: tabular-nums; }
+  .spread.unstable { color: var(--score-2); font-weight: 600; }
+  .card .value .sub { display: block; font-size: 12px; font-weight: 400; color: #6b7280; margin-top: 2px; }
+  .note { color: #4b5563; font-size: 14px; }
   .badge.none { background: var(--muted); }
 
   footer { margin-top: 36px; font-size: 12px; color: var(--muted); }
@@ -106,7 +110,36 @@
   <div class="card"><div class="label">Test cases</div><div class="value">{{ test_case_count }}</div></div>
   <div class="card"><div class="label">Total cost</div><div class="value">${{ "%.4f" | format(total_cost) }}</div></div>
   <div class="card"><div class="label">Total time</div><div class="value">{{ "%.1f" | format(total_time / 1000) }}s</div></div>
+  {% if stability.sampled %}
+  <div class="card"><div class="label">Judge disagreements</div><div class="value">{{ stability.disagreements }}<span class="sub">/ {{ stability.judged_results }} judged, {{ judge_samples }} samples each</span></div></div>
+  {% endif %}
 </div>
+
+{% if stability.sampled %}
+<h2>Judge stability</h2>
+<p class="note">Each response was judged {{ judge_samples }} times. Score badges show the median verdict; the spread shows the lowest and highest sample.
+{% if stability.mean_std is not none %} Mean score standard deviation across responses: {{ "%.2f" | format(stability.mean_std) }}.{% endif %}</p>
+{% if stability.unstable_cases %}
+<table>
+  <thead>
+    <tr><th>Test case</th><th>Model</th><th>Median</th><th>Spread</th><th>Std dev</th></tr>
+  </thead>
+  <tbody>
+    {% for c in stability.unstable_cases %}
+    <tr>
+      <td>{{ c.test_case_id }}</td>
+      <td>{{ c.model }}</td>
+      <td><span class="badge s{{ c.score }}">{{ c.score }}/5</span></td>
+      <td><span class="spread unstable">{{ c.spread }}</span></td>
+      <td>{{ "%.2f" | format(c.score_std) }}</td>
+    </tr>
+    {% endfor %}
+  </tbody>
+</table>
+{% else %}
+<p class="note">The judge agreed with itself on every response.</p>
+{% endif %}
+{% endif %}
 
 <h2>Model comparison</h2>
 <table>
@@ -162,6 +195,9 @@
       <span class="provider">{{ r.provider }}</span>
       {% if r.score is not none %}
       <span class="badge s{{ r.score }}">{{ r.score }}/5</span>
+      {% if r.sample_scores %}
+      <span class="spread{% if r.disagreement %} unstable{% endif %}" title="Judge samples: {{ r.sample_scores | join(', ') }}">samples {{ r.score_min }}-{{ r.score_max }}{% if r.disagreement %}, disagreement{% endif %}</span>
+      {% endif %}
       {% else %}
       <span class="badge none">unscored</span>
       {% endif %}

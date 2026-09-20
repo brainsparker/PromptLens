@@ -63,8 +63,11 @@ class Runner:
         if not self.providers:
             raise ValueError("No providers successfully initialized")
 
-        # Semaphore for rate limiting
-        self.semaphore = asyncio.Semaphore(config.execution.parallel_requests)
+        # Semaphore for rate limiting. Created lazily in run(): on Python 3.9
+        # asyncio primitives bind to the event loop that exists when they are
+        # constructed, and the Runner is built before asyncio.run() starts the
+        # loop, so a semaphore created here breaks as soon as a task has to wait.
+        self.semaphore: Optional[asyncio.Semaphore] = None
 
     async def run(self) -> RunResult:
         """Run the complete evaluation.
@@ -90,6 +93,7 @@ class Runner:
 
         # Run evaluations
         console.print(f"[yellow]Running evaluations...[/yellow]")
+        self.semaphore = asyncio.Semaphore(self.config.execution.parallel_requests)
         results = await self._run_evaluations(golden_set)
 
         # Calculate totals
@@ -110,6 +114,8 @@ class Runner:
                 "golden_set_path": self.config.golden_set,
                 "test_case_count": len(golden_set.test_cases),
                 "provider_count": len(self.providers),
+                "judge_samples": self.config.judge.samples,
+                "judge_disagreement_range": self.config.judge.disagreement_range,
             },
         )
 
@@ -197,6 +203,9 @@ class Runner:
         Returns:
             EvaluationResult
         """
+        if self.semaphore is None:
+            self.semaphore = asyncio.Semaphore(self.config.execution.parallel_requests)
+
         async with self.semaphore:
             # Check if tools are requested but provider doesn't support them
             if test_case.tools and not provider.supports_tools():
@@ -219,7 +228,12 @@ class Runner:
             judge_score = None
             if not model_response.error:
                 try:
-                    judge_score = await self.judge.evaluate(test_case, model_response)
+                    judge_score = await self.judge.evaluate_sampled(
+                        test_case,
+                        model_response,
+                        samples=self.config.judge.samples,
+                        disagreement_range=self.config.judge.disagreement_range,
+                    )
                 except Exception as e:
                     logger.error(f"Judge evaluation failed: {e}")
 

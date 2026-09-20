@@ -20,7 +20,8 @@ from promptlens.exporters.html_exporter import HTMLExporter
 from promptlens.exporters.json_exporter import JSONExporter
 from promptlens.exporters.junit_exporter import JUnitXMLExporter
 from promptlens.exporters.markdown_exporter import MarkdownExporter
-from promptlens.models.config import RunConfig
+from promptlens.judges.stability import StabilitySummary, summarize_stability
+from promptlens.models.config import MAX_JUDGE_SAMPLES, RunConfig
 from promptlens.models.result import RunResult
 from promptlens.runners.runner import Runner
 
@@ -51,6 +52,57 @@ def _remove_path_if_exists(path: Path) -> None:
         path.unlink(missing_ok=True)
     elif path.exists():
         shutil.rmtree(path)
+
+
+def _check_judge_disagreement(
+    result: "RunResult", fail_under: Optional[float]
+) -> "StabilitySummary":
+    """Summarize judge stability for the --fail-on-judge-disagreement gate.
+
+    The gate trips when any judged response is flagged as a disagreement
+    (sample spread at or above judge.disagreement_range) or when its samples
+    straddle the --fail-under threshold, meaning the gate verdict for that
+    case depends on which judge sample won.
+
+    Args:
+        result: The completed run result
+        fail_under: The active quality gate threshold, if any
+
+    Returns:
+        StabilitySummary whose unstable_cases list is non-empty when the gate fails
+    """
+    return summarize_stability(result, threshold=fail_under)
+
+
+def _print_stability_report(stability: "StabilitySummary") -> None:
+    """Print the judge stability section shown after a sampled run."""
+    console.print(
+        f"\n[bold]Judge stability[/bold] "
+        f"({stability.samples_per_response} judge samples per response)"
+    )
+    if stability.mean_std is not None:
+        console.print(f"  Mean score std dev: {stability.mean_std:.2f}")
+    rate = stability.disagreement_rate
+    rate_display = f" ({rate:.0%})" if rate is not None else ""
+    console.print(
+        f"  Disagreements: {stability.disagreements}/{stability.judged_results}{rate_display}"
+    )
+    if stability.threshold is not None:
+        console.print(
+            f"  Gate straddles (samples on both sides of {stability.threshold:g}): "
+            f"{stability.gate_straddles}"
+        )
+    for case in stability.unstable_cases:
+        flags = []
+        if case.disagreement:
+            flags.append("disagreement")
+        if case.straddles_gate:
+            flags.append("straddles gate")
+        # Parentheses, not square brackets: Rich would parse brackets as markup.
+        console.print(
+            f"    {case.test_case_id} / {case.model}: scores {case.spread_label}, "
+            f"median {case.score} ({', '.join(flags)})"
+        )
 
 
 def _check_fail_under(result: "RunResult", fail_under: float) -> list:
@@ -130,12 +182,34 @@ def cli(log_level: str) -> None:
         "failure threshold used by the junit export format."
     ),
 )
+@click.option(
+    "--judge-samples",
+    type=click.IntRange(1, MAX_JUDGE_SAMPLES),
+    default=None,
+    help=(
+        "Judge every response this many times and aggregate the verdicts "
+        "(median score, plus spread, std dev, and a disagreement flag in every "
+        "report). Overrides judge.samples in the config. Default 1."
+    ),
+)
+@click.option(
+    "--fail-on-judge-disagreement",
+    is_flag=True,
+    help=(
+        "Exit with code 3 if the judge disagreed with itself on any response "
+        "(sample spread at or above judge.disagreement_range), or if any "
+        "response's samples fall on both sides of --fail-under. Requires "
+        "judge samples greater than 1."
+    ),
+)
 def run(
     config: str,
     golden_set: Optional[str],
     output_dir: Optional[str],
     dry_run: bool,
     fail_under: Optional[float],
+    judge_samples: Optional[int],
+    fail_on_judge_disagreement: bool,
 ) -> None:
     """Run evaluation with the given configuration file.
 
@@ -146,6 +220,7 @@ def run(
         promptlens run config.yaml --output-dir ./results
         promptlens run config.yaml --dry-run
         promptlens run config.yaml --fail-under 3.5
+        promptlens run config.yaml --judge-samples 3 --fail-under 3.5 --fail-on-judge-disagreement
     """
     try:
         # Load config
@@ -158,6 +233,12 @@ def run(
         if output_dir:
             config_data.setdefault("output", {})
             config_data["output"]["directory"] = output_dir
+        if judge_samples is not None:
+            judge_section = config_data.setdefault("judge", {})
+            if not isinstance(judge_section, dict):
+                console.print("[red]Invalid configuration: judge must be a mapping[/red]")
+                sys.exit(1)
+            judge_section["samples"] = judge_samples
 
         # Parse config
         try:
@@ -168,11 +249,19 @@ def run(
 
         console.print("[green]✓[/green] Configuration loaded successfully")
 
+        if fail_on_judge_disagreement and run_config.judge.samples < 2:
+            console.print(
+                "[red]--fail-on-judge-disagreement needs at least 2 judge samples. "
+                "Pass --judge-samples N or set judge.samples in the config.[/red]"
+            )
+            sys.exit(1)
+
         if dry_run:
             console.print("\n[yellow]Dry run mode - configuration is valid[/yellow]")
             console.print(f"  Golden set: {run_config.golden_set}")
             console.print(f"  Models: {len(run_config.models)}")
             console.print(f"  Output: {run_config.output.directory}")
+            console.print(f"  Judge samples: {run_config.judge.samples}")
             return
 
         # Run evaluation
@@ -219,6 +308,11 @@ def run(
             html_path = run_output_dir / "report.html"
             console.print(f"\n[cyan]View report: file://{html_path.absolute()}[/cyan]")
 
+        # Judge stability report (sampled runs only)
+        stability = _check_judge_disagreement(result, fail_under)
+        if stability.sampled:
+            _print_stability_report(stability)
+
         # Quality gate for CI
         if fail_under is not None:
             failing_models = _check_fail_under(result, fail_under)
@@ -233,6 +327,18 @@ def run(
             console.print(
                 f"\n[bold green]✓ Quality gate passed (--fail-under {fail_under:g})[/bold green]"
             )
+
+        # Judge disagreement gate for CI (exit code 3: the measurement is not
+        # trustworthy, which is a different problem from a quality regression)
+        if fail_on_judge_disagreement:
+            if stability.unstable_cases:
+                console.print(
+                    "\n[bold red]✗ Judge disagreement gate failed: "
+                    f"{len(stability.unstable_cases)} response(s) did not get a stable "
+                    "verdict[/bold red]"
+                )
+                sys.exit(3)
+            console.print("\n[bold green]✓ Judge disagreement gate passed[/bold green]")
 
     except Exception as e:
         console.print(f"\n[bold red]Error:[/bold red] {e}")

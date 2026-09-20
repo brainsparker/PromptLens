@@ -1,0 +1,40 @@
+# Judge Stability Configuration
+# Judges every response 3 times and reports how much the judge disagreed with
+# itself. Pair with the CLI gates to stop a single noisy verdict from deciding
+# a CI build:
+#
+#   promptlens run examples/configs/judge_stability.yaml \
+#     --fail-under 3.5 --fail-on-judge-disagreement
+#
+# Exit codes: 0 pass, 1 run error, 2 quality gate failed, 3 judge disagreement.
+# Note that sampling multiplies judge API calls (and judge cost) by `samples`.
+
+golden_set: ./examples/golden_sets/customer_support.yaml
+
+models:
+  - name: "Claude 3.5 Sonnet"
+    provider: anthropic
+    model: claude-3-5-sonnet-20241022
+    temperature: 0.7
+    max_tokens: 1024
+
+judge:
+  provider: anthropic
+  model: claude-3-5-sonnet-20241022
+  temperature: 0.3
+  samples: 3              # Independent judge calls per response
+  disagreement_range: 2   # Spread (max minus min) that counts as a disagreement
+
+execution:
+  parallel_requests: 3
+  retry_attempts: 3
+  timeout_seconds: 60
+
+output:
+  directory: ./promptlens_results
+  formats:
+    - html
+    - json
+    - csv
+    - junit
+  run_name: "Customer Support - Judge Stability"

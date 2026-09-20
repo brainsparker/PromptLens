@@ -3,10 +3,10 @@
 import csv
 import logging
 from pathlib import Path
-from typing import List, Dict, Any
+from typing import Any, Dict, List, Optional
 
 from promptlens.exporters.base import BaseExporter
-from promptlens.models.result import RunResult
+from promptlens.models.result import JudgeScore, RunResult
 
 logger = logging.getLogger(__name__)
 
@@ -70,9 +70,33 @@ class CSVExporter(BaseExporter):
                 "tokens_used": eval_result.model_response.tokens_used or 0,
                 "error": eval_result.model_response.error or "",
             }
+            row.update(self._stability_columns(eval_result.judge_score))
             rows.append(row)
 
         return rows
+
+    @staticmethod
+    def _stability_columns(judge_score: Optional[JudgeScore]) -> Dict[str, Any]:
+        """Judge stability columns. Blank when the judge ran once."""
+        if judge_score is None or not judge_score.is_sampled:
+            return {
+                "judge_samples": judge_score.sample_count if judge_score else None,
+                "score_mean": "",
+                "score_std": "",
+                "score_min": "",
+                "score_max": "",
+                "score_samples": "",
+                "judge_disagreement": "",
+            }
+        return {
+            "judge_samples": judge_score.sample_count,
+            "score_mean": f"{judge_score.score_mean:.3f}",
+            "score_std": f"{judge_score.score_std:.3f}",
+            "score_min": judge_score.score_min,
+            "score_max": judge_score.score_max,
+            "score_samples": "|".join(str(s) for s in judge_score.sample_scores),
+            "judge_disagreement": judge_score.disagreement,
+        }
 
     @property
     def file_extension(self) -> str:

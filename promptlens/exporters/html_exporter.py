@@ -7,6 +7,7 @@ from pathlib import Path
 from jinja2 import Environment, FileSystemLoader, select_autoescape
 
 from promptlens.exporters.base import BaseExporter
+from promptlens.judges.stability import summarize_stability
 from promptlens.models.result import RunResult
 
 logger = logging.getLogger(__name__)
@@ -106,10 +107,47 @@ class HTMLExporter(BaseExporter):
                     "latency_ms": eval_result.model_response.latency_ms,
                     "cost_usd": eval_result.model_response.cost_usd or 0.0,
                     "error": eval_result.model_response.error,
+                    "sample_scores": (
+                        list(eval_result.judge_score.sample_scores)
+                        if eval_result.judge_score and eval_result.judge_score.is_sampled
+                        else []
+                    ),
+                    "score_min": (
+                        eval_result.judge_score.score_min if eval_result.judge_score else None
+                    ),
+                    "score_max": (
+                        eval_result.judge_score.score_max if eval_result.judge_score else None
+                    ),
+                    "score_std": (
+                        eval_result.judge_score.score_std if eval_result.judge_score else None
+                    ),
+                    "disagreement": (
+                        eval_result.judge_score.disagreement if eval_result.judge_score else False
+                    ),
                 }
             )
 
+        stability = summarize_stability(result)
+
         return {
+            "judge_samples": stability.samples_per_response,
+            "stability": {
+                "sampled": stability.sampled,
+                "mean_std": stability.mean_std,
+                "disagreements": stability.disagreements,
+                "judged_results": stability.judged_results,
+                "disagreement_rate": stability.disagreement_rate,
+                "unstable_cases": [
+                    {
+                        "test_case_id": c.test_case_id,
+                        "model": c.model,
+                        "score": c.score,
+                        "spread": c.spread_label,
+                        "score_std": c.score_std,
+                    }
+                    for c in stability.unstable_cases
+                ],
+            },
             "run_id": result.run_id,
             "run_name": result.run_name or "Unnamed Run",
             "timestamp": result.timestamp.strftime("%Y-%m-%d %H:%M:%S UTC"),

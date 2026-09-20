@@ -22,6 +22,7 @@ PromptLens runs golden test sets against multiple models, scores outputs using L
 - **Beautiful Reports** - Interactive HTML reports with charts, comparisons, and detailed results
 - **Multiple Export Formats** - HTML, JSON, CSV, Markdown, and JUnit XML outputs
 - **CI-Native Quality Gates** - JUnit XML reports plus a `--fail-under` score gate that fails the build on quality regressions
+- **Judge Stability Sampling** - Judge each response N times, report the median verdict with spread and standard deviation, and gate CI on judge disagreement so one noisy verdict cannot flip a build
 - **Cross-Run Comparison** - Diff any two runs by test case and model with score, cost, and latency deltas, plus a `--fail-on-regression` CI gate
 - **Parallel Execution** - Async execution with configurable concurrency and retry logic
 - **Portable & Local** - No cloud backend, all data stays on your machine
@@ -295,7 +296,21 @@ judge:
     - accuracy
     - helpfulness
     - safety
+  samples: 1                        # Judge calls per response (raise to 3-5 to measure judge stability)
+  disagreement_range: 2             # Sample spread (max minus min) that counts as a disagreement
 ```
+
+#### Judge stability sampling
+
+An LLM judge is not a deterministic instrument. Judged twice, the same response can get two different scores, and when one verdict decides a CI gate that noise becomes a flaky build. Set `judge.samples` (or pass `--judge-samples N`) to judge every response N times:
+
+```bash
+promptlens run config.yaml --judge-samples 3
+```
+
+Each result then carries the median verdict as its `score`, plus `sample_scores`, `score_mean`, `score_std`, `score_min`, `score_max`, and a `disagreement` flag that trips when the spread reaches `disagreement_range`. Model averages use the sample mean. Every exporter surfaces the data: the HTML report shows the spread next to each score badge and lists disagreements in a Judge stability section, Markdown gets a Judge Stability table, CSV gains `judge_samples`, `score_mean`, `score_std`, `score_min`, `score_max`, `score_samples`, and `judge_disagreement` columns, and JUnit records per-suite `judge_samples`, `judge_disagreements`, and `judge_gate_straddles` properties.
+
+Sampling multiplies judge calls by N, so it costs N times the judge spend. The default of 1 keeps existing behavior and output unchanged. See `examples/configs/judge_stability.yaml` for a ready-made config.
 
 ### Execution
 
@@ -335,6 +350,20 @@ promptlens run config.yaml --fail-under 3.5
 - Each golden-set test case becomes a JUnit test case (one test suite per model).
 - A test case scoring below the threshold is reported as a failure, a model API error as an error, and an unjudged case as skipped.
 - If any model's average judge score falls below `--fail-under`, the command exits with code 2, failing the pipeline. Exit code 1 is reserved for run errors, so CI can tell quality regressions apart from infrastructure failures.
+
+### Gating on judge disagreement
+
+A quality gate is only as trustworthy as the judge behind it. Combine judge sampling with `--fail-on-judge-disagreement` to fail the build when the measurement itself is unreliable:
+
+```bash
+promptlens run config.yaml --judge-samples 3 --fail-under 3.5 --fail-on-judge-disagreement
+```
+
+- A response counts as unstable when its judge samples spread at least `judge.disagreement_range` points (default 2 on the 1-5 scale), or when its samples fall on both sides of `--fail-under`, meaning the pass or fail verdict for that case depended on which judge sample won.
+- If any response is unstable the command exits with code 3. This is deliberately distinct from exit code 2: a 2 says the prompt got worse, a 3 says the judge could not agree and the result should not be trusted either way. Fix the judge prompt, lower its temperature, or add samples before acting on the score.
+- The `--fail-under` gate is still evaluated first, against the sample means, so a real regression is reported as a 2 even when the judge is also noisy.
+
+Exit codes at a glance: 0 pass, 1 run error, 2 quality gate failed, 3 judge disagreement gate failed.
 
 Example GitHub Actions step:
 

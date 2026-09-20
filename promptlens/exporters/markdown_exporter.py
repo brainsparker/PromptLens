@@ -5,9 +5,21 @@ from pathlib import Path
 from typing import Optional
 
 from promptlens.exporters.base import BaseExporter
-from promptlens.models.result import RunResult
+from promptlens.judges.stability import summarize_stability
+from promptlens.models.result import JudgeScore, RunResult
 
 logger = logging.getLogger(__name__)
+
+
+def _format_score(judge_score: Optional[JudgeScore]) -> str:
+    """Render a score cell, adding the sample spread for sampled judgements."""
+    if judge_score is None:
+        return "N/A"
+    if not judge_score.is_sampled:
+        return f"{judge_score.score}/5"
+    spread = f"{judge_score.score_min}-{judge_score.score_max}"
+    marker = " (disagreement)" if judge_score.disagreement else ""
+    return f"{judge_score.score}/5 (samples {spread}){marker}"
 
 
 class MarkdownExporter(BaseExporter):
@@ -65,6 +77,37 @@ class MarkdownExporter(BaseExporter):
         lines.append(f"| Models | {len(result.models_tested)} |")
         lines.append("")
 
+        # Judge stability (sampled runs only)
+        stability = summarize_stability(result)
+        if stability.sampled:
+            lines.append("## Judge Stability")
+            lines.append("")
+            lines.append(
+                f"Each response was judged {stability.samples_per_response} times. "
+                "The score column below shows the median verdict and the sample spread."
+            )
+            lines.append("")
+            lines.append("| Metric | Value |")
+            lines.append("|--------|-------|")
+            lines.append(f"| Judge Samples per Response | {stability.samples_per_response} |")
+            if stability.mean_std is not None:
+                lines.append(f"| Mean Score Std Dev | {stability.mean_std:.2f} |")
+            rate = stability.disagreement_rate
+            rate_text = f" ({rate:.0%})" if rate is not None else ""
+            lines.append(
+                f"| Disagreements | {stability.disagreements}/{stability.judged_results}{rate_text} |"
+            )
+            lines.append("")
+            if stability.unstable_cases:
+                lines.append("| Test Case | Model | Median | Spread | Std Dev |")
+                lines.append("|-----------|-------|--------|--------|---------|")
+                for case in stability.unstable_cases:
+                    lines.append(
+                        f"| `{case.test_case_id}` | {case.model} | {case.score}/5 | "
+                        f"{case.spread_label} | {case.score_std:.2f} |"
+                    )
+                lines.append("")
+
         # Per-model results
         lines.append("## Model Results")
         lines.append("")
@@ -109,11 +152,7 @@ class MarkdownExporter(BaseExporter):
             lines.append("|-------|-------|---------|------|----------|")
 
             for eval_result in evals:
-                score = (
-                    f"{eval_result.judge_score.score}/5"
-                    if eval_result.judge_score
-                    else "N/A"
-                )
+                score = _format_score(eval_result.judge_score)
                 latency = f"{eval_result.model_response.latency_ms:.0f}ms"
                 cost = f"${eval_result.model_response.cost_usd:.4f}" if eval_result.model_response.cost_usd else "$0.00"
                 response = eval_result.model_response.content[:100].replace("\n", " ")
