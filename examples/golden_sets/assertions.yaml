@@ -1,0 +1,50 @@
+name: "Deterministic Assertions"
+description: "Test cases that pair free, local assertions with the LLM judge"
+version: "1.0"
+
+test_cases:
+  - id: "assert-001"
+    query: "In one sentence, what is the capital of France?"
+    expected_behavior: "Name Paris in a single short sentence"
+    category: "factual"
+    tags: ["assertions", "factual"]
+    assertions:
+      - type: contains
+        value: "Paris"
+      - type: max_length
+        value: 200
+
+  - id: "assert-002"
+    query: "Return a JSON object with keys 'city' and 'country' for the capital of Japan. Return only JSON."
+    expected_behavior: "Return valid JSON with the two requested keys and correct values"
+    category: "structured_output"
+    tags: ["assertions", "json"]
+    assertions:
+      - type: is_json
+      - type: contains_all
+        value: ["city", "country", "Tokyo"]
+        case_sensitive: false
+
+  - id: "assert-003"
+    query: "A customer asks how to reset their password. Reply without using the phrase 'I cannot'."
+    expected_behavior: "Give reset steps and never refuse"
+    category: "customer_support"
+    tags: ["assertions", "support"]
+    assertions:
+      - type: contains_any
+        value: ["reset", "Forgot password"]
+        case_sensitive: false
+        name: "mentions the reset flow"
+      - type: not_contains
+        value: "I cannot"
+        case_sensitive: false
+
+  - id: "assert-004"
+    query: "Give a US phone number for a fictional pizza shop, in the format 555-XXX-XXXX."
+    expected_behavior: "Include exactly one phone number in the requested format"
+    category: "formatting"
+    tags: ["assertions", "regex"]
+    assertions:
+      - type: regex
+        value: "\\b555-\\d{3}-\\d{4}\\b"
+        name: "phone number format"

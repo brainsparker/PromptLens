@@ -5,6 +5,7 @@ from typing import Any, Dict, List, Optional
 
 from pydantic import BaseModel, Field
 
+from promptlens.models.assertions import AssertionResult
 from promptlens.models.tools import ToolCall, ToolCallEvaluation
 
 
@@ -94,6 +95,10 @@ class EvaluationResult(BaseModel):
         expected_behavior: What was expected
         model_response: The model's response with metadata
         judge_score: Score from the judge (if judging was performed)
+        assertion_results: Outcome of each deterministic assertion declared on
+            the test case (empty when the test case has none)
+        judge_skipped_reason: Why the judge was not run, if it was skipped on
+            purpose (for example because an assertion already failed)
         timestamp: When the evaluation was performed
     """
 
@@ -102,7 +107,26 @@ class EvaluationResult(BaseModel):
     expected_behavior: str
     model_response: ModelResponse
     judge_score: Optional[JudgeScore] = None
+    assertion_results: List[AssertionResult] = Field(default_factory=list)
+    judge_skipped_reason: Optional[str] = None
     timestamp: datetime = Field(default_factory=datetime.utcnow)
+
+    @property
+    def has_assertions(self) -> bool:
+        """Whether any deterministic assertions were evaluated."""
+        return bool(self.assertion_results)
+
+    @property
+    def assertions_passed(self) -> Optional[bool]:
+        """True if every assertion passed, False if any failed, None if none ran."""
+        if not self.assertion_results:
+            return None
+        return all(r.passed for r in self.assertion_results)
+
+    @property
+    def failed_assertions(self) -> List[AssertionResult]:
+        """Assertions that did not pass."""
+        return [r for r in self.assertion_results if not r.passed]
 
 
 class RunResult(BaseModel):
@@ -145,6 +169,47 @@ class RunResult(BaseModel):
 
         scores = [r.judge_score.score for r in filtered_results if r.judge_score]
         return sum(scores) / len(scores) if scores else None
+
+    def get_assertion_summary(self, model: Optional[str] = None) -> Dict[str, int]:
+        """Count assertion outcomes for a specific model or all models.
+
+        Args:
+            model: Optional model name to filter by
+
+        Returns:
+            Dict with keys: checks (assertions evaluated), failed (assertions
+            that failed), cases (evaluations that had assertions), and
+            cases_failed (evaluations with at least one failing assertion)
+        """
+        filtered_results = self.results
+        if model:
+            filtered_results = [r for r in self.results if r.model_response.model == model]
+
+        summary = {"checks": 0, "failed": 0, "cases": 0, "cases_failed": 0}
+        for eval_result in filtered_results:
+            if not eval_result.assertion_results:
+                continue
+            summary["cases"] += 1
+            summary["checks"] += len(eval_result.assertion_results)
+            failed = len(eval_result.failed_assertions)
+            summary["failed"] += failed
+            if failed:
+                summary["cases_failed"] += 1
+        return summary
+
+    def get_assertion_pass_rate(self, model: Optional[str] = None) -> Optional[float]:
+        """Fraction of evaluations with assertions where every assertion passed.
+
+        Args:
+            model: Optional model name to filter by
+
+        Returns:
+            Pass rate between 0.0 and 1.0, or None if no assertions were evaluated
+        """
+        summary = self.get_assertion_summary(model)
+        if summary["cases"] == 0:
+            return None
+        return (summary["cases"] - summary["cases_failed"]) / summary["cases"]
 
     def get_total_cost(self, model: Optional[str] = None) -> float:
         """Calculate total cost for a specific model or all models.

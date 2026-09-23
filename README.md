@@ -17,11 +17,12 @@ PromptLens runs golden test sets against multiple models, scores outputs using L
 
 - **Multi-Provider Support** - Test Anthropic (Claude), OpenAI (GPT), Google (Gemini), You.com, and local models (Ollama, LM Studio)
 - **Tool/Function Calling Evaluation** - Test tool usage with automatic + LLM judge scoring across 5 criteria
+- **Deterministic Assertions** - Free, local checks (contains, regex, is_json, max_length, and more) that run before the judge and can gate CI on their own
 - **LLM-as-Judge Scoring** - Automated evaluation using another LLM with configurable criteria
 - **Cost & Latency Tracking** - Monitor per-query costs and response times across models
 - **Beautiful Reports** - Interactive HTML reports with charts, comparisons, and detailed results
 - **Multiple Export Formats** - HTML, JSON, CSV, Markdown, and JUnit XML outputs
-- **CI-Native Quality Gates** - JUnit XML reports plus a `--fail-under` score gate that fails the build on quality regressions
+- **CI-Native Quality Gates** - JUnit XML reports plus `--fail-on-assertion` and `--fail-under` gates that fail the build on quality regressions
 - **Cross-Run Comparison** - Diff any two runs by test case and model with score, cost, and latency deltas, plus a `--fail-on-regression` CI gate
 - **Parallel Execution** - Async execution with configurable concurrency and retry logic
 - **Portable & Local** - No cloud backend, all data stays on your machine
@@ -114,6 +115,47 @@ test_cases:
 ```
 
 Save as `my_tests.yaml`.
+
+### Adding Deterministic Assertions
+
+Some parts of a good answer are not a judgment call: the reply must mention the refund window, must not say "I cannot", must be valid JSON, must fit in 300 characters. Declare those as `assertions` on a test case and PromptLens checks them locally, with no model call, before the judge runs:
+
+```yaml
+test_cases:
+  - id: "test-002"
+    query: "What's your refund policy?"
+    expected_behavior: "Explain the 30-day refund policy clearly"
+    assertions:
+      - type: contains
+        value: "30 days"
+        case_sensitive: false
+      - type: not_contains
+        value: "I cannot"
+      - type: max_length
+        value: 600
+```
+
+Every assertion has a `type`, most take a `value`, and text checks accept `case_sensitive: false`. An optional `name` replaces the generated label in reports.
+
+| Type | Value | Passes when |
+|------|-------|-------------|
+| `contains` | string | the response contains the text |
+| `not_contains` | string | the response does not contain the text |
+| `contains_any` | list of strings | at least one item appears in the response |
+| `contains_all` | list of strings | every item appears in the response |
+| `equals` | string | the response, trimmed, equals the text exactly |
+| `starts_with` | string | the trimmed response starts with the text |
+| `ends_with` | string | the trimmed response ends with the text |
+| `regex` | pattern | the pattern matches anywhere in the response (`case_sensitive: false` adds the IGNORECASE flag) |
+| `is_json` | none | the response (or a fenced ```` ```json ```` block) parses as JSON |
+| `min_length` | integer | the response has at least that many characters |
+| `max_length` | integer | the response has at most that many characters |
+
+Assertions are exact and repeatable: the same response gives the same result every run, so they are safe to gate a build on. Bad assertions (an unknown type, an invalid regex, a missing value) are rejected by `promptlens validate` before any paid call is made.
+
+Assertions and the judge are complementary. Results record both, and every export shows them side by side. To save judge spend on responses an assertion has already caught, set `skip_judge_on_assertion_failure: true` under `execution` in your config; those results carry a `judge_skipped_reason` instead of a score.
+
+See [`examples/golden_sets/assertions.yaml`](examples/golden_sets/assertions.yaml) and [`examples/configs/assertions_config.yaml`](examples/configs/assertions_config.yaml) for a runnable example.
 
 ### Creating a Configuration File
 
@@ -304,6 +346,7 @@ execution:
   parallel_requests: 3              # Concurrent API calls
   retry_attempts: 3                 # Retries for failed requests
   timeout_seconds: 60               # Request timeout
+  skip_judge_on_assertion_failure: false  # true: do not pay for a judge call when an assertion already failed
 ```
 
 ### Output
@@ -326,21 +369,22 @@ output:
 
 PromptLens speaks the language your CI system already understands: JUnit XML test reports and exit codes.
 
-Add `junit` to your output formats, then gate the build on judge scores:
+Add `junit` to your output formats, then gate the build on assertions, judge scores, or both:
 
 ```bash
-promptlens run config.yaml --fail-under 3.5
+promptlens run config.yaml --fail-on-assertion --fail-under 3.5
 ```
 
 - Each golden-set test case becomes a JUnit test case (one test suite per model).
-- A test case scoring below the threshold is reported as a failure, a model API error as an error, and an unjudged case as skipped.
+- A test case with a failing assertion is reported as a failure (type `AssertionFailed`) regardless of its judge score. A test case scoring below the threshold is reported as a failure, a model API error as an error, and a case with neither a judge score nor assertions as skipped.
+- `--fail-on-assertion` exits with code 2 if any assertion failed for any model, and prints each failure with its test case and model. This gate is deterministic, so it never flakes.
 - If any model's average judge score falls below `--fail-under`, the command exits with code 2, failing the pipeline. Exit code 1 is reserved for run errors, so CI can tell quality regressions apart from infrastructure failures.
 
 Example GitHub Actions step:
 
 ```yaml
 - name: Run prompt evals
-  run: promptlens run config.yaml --fail-under 3.5
+  run: promptlens run config.yaml --fail-on-assertion --fail-under 3.5
 
 - name: Publish eval report
   uses: mikepenz/action-junit-report@v5
@@ -655,6 +699,7 @@ class RuleBasedJudge(BaseJudge):
 - [x] HTML reports with charts
 - [x] JSON/CSV/Markdown export
 - [x] JUnit XML export and `--fail-under` CI quality gate
+- [x] Deterministic assertions with a `--fail-on-assertion` CI gate
 - [x] Parallel execution with retry logic
 - [x] Cross-run comparison with `--fail-on-regression` CI gate
 - [ ] Multi-judge consensus scoring

@@ -1,0 +1,36 @@
+# Deterministic assertions alongside the LLM judge.
+#
+# Run:  promptlens run examples/configs/assertions_config.yaml --fail-on-assertion
+#
+# Assertions run locally against every response before the judge. With
+# skip_judge_on_assertion_failure set, responses that already fail an
+# assertion are not sent to the judge at all, which saves judge spend on
+# answers you already know are wrong.
+
+golden_set: "./examples/golden_sets/assertions.yaml"
+
+models:
+  - name: "Claude 3.5 Sonnet"
+    provider: "anthropic"
+    model: "claude-3-5-sonnet-20241022"
+    temperature: 0.2
+    max_tokens: 512
+
+judge:
+  provider: "anthropic"
+  model: "claude-3-5-sonnet-20241022"
+  temperature: 0.3
+  criteria:
+    - "accuracy"
+    - "helpfulness"
+
+execution:
+  parallel_requests: 3
+  retry_attempts: 3
+  timeout_seconds: 60
+  skip_judge_on_assertion_failure: true
+
+output:
+  directory: "./promptlens_results"
+  formats: ["html", "json", "junit"]
+  run_name: "Assertions Example"
