@@ -16,6 +16,7 @@ from rich.progress import (
     TimeElapsedColumn,
 )
 
+from promptlens.assertions import evaluate_assertions
 from promptlens.judges.llm_judge import LLMJudge
 from promptlens.loaders.yaml_loader import get_loader
 from promptlens.models.config import RunConfig
@@ -63,8 +64,11 @@ class Runner:
         if not self.providers:
             raise ValueError("No providers successfully initialized")
 
-        # Semaphore for rate limiting
-        self.semaphore = asyncio.Semaphore(config.execution.parallel_requests)
+        # Semaphore for rate limiting. Created lazily inside the running event
+        # loop (see _run_evaluations): on Python 3.9 asyncio primitives bind to
+        # the loop that exists when they are constructed, and Runner is built
+        # before asyncio.run() starts its loop.
+        self.semaphore: Optional[asyncio.Semaphore] = None
 
     async def run(self) -> RunResult:
         """Run the complete evaluation.
@@ -131,6 +135,9 @@ class Runner:
             List of evaluation results
         """
         results: List[EvaluationResult] = []
+
+        # Bind the concurrency limit to the loop that is actually running.
+        self.semaphore = asyncio.Semaphore(self.config.execution.parallel_requests)
 
         # Calculate total tasks
         total_tasks = len(golden_set.test_cases) * len(self.providers)
@@ -215,13 +222,37 @@ class Runner:
                 timeout_seconds=self.config.execution.timeout_seconds,
             )
 
+            # Deterministic assertions run first: local, free, and repeatable.
+            # They are skipped when generation failed, since there is no
+            # response to check and the error is reported on its own.
+            assertion_results = []
+            if not model_response.error and test_case.assertions:
+                assertion_results = evaluate_assertions(
+                    test_case.assertions, model_response.content
+                )
+                for assertion_result in assertion_results:
+                    if not assertion_result.passed:
+                        logger.info(
+                            f"Assertion failed for '{test_case.id}' on "
+                            f"{model_response.model}: {assertion_result.message}"
+                        )
+
             # Judge the response (only if generation succeeded)
             judge_score = None
+            judge_skipped_reason = None
+            assertions_failed = any(not r.passed for r in assertion_results)
             if not model_response.error:
-                try:
-                    judge_score = await self.judge.evaluate(test_case, model_response)
-                except Exception as e:
-                    logger.error(f"Judge evaluation failed: {e}")
+                if assertions_failed and self.config.execution.skip_judge_on_assertion_failure:
+                    judge_skipped_reason = "assertion failed"
+                    logger.info(
+                        f"Skipping judge for '{test_case.id}' on {model_response.model}: "
+                        "a deterministic assertion failed"
+                    )
+                else:
+                    try:
+                        judge_score = await self.judge.evaluate(test_case, model_response)
+                    except Exception as e:
+                        logger.error(f"Judge evaluation failed: {e}")
 
             # Update progress
             progress.update(task_id, advance=1)
@@ -232,6 +263,8 @@ class Runner:
                 expected_behavior=test_case.expected_behavior,
                 model_response=model_response,
                 judge_score=judge_score,
+                assertion_results=assertion_results,
+                judge_skipped_reason=judge_skipped_reason,
                 timestamp=datetime.utcnow(),
             )
 
@@ -252,6 +285,15 @@ class Runner:
             console.print(f"[bold]{model}[/bold]")
             if avg_score is not None:
                 console.print(f"  Average Score: {avg_score:.2f}/5.0")
+            assertion_summary = result.get_assertion_summary(model)
+            if assertion_summary["cases"]:
+                passed_cases = assertion_summary["cases"] - assertion_summary["cases_failed"]
+                color = "green" if assertion_summary["cases_failed"] == 0 else "red"
+                console.print(
+                    f"  Assertions: [{color}]{passed_cases}/{assertion_summary['cases']} "
+                    f"cases passed[/{color}] "
+                    f"({assertion_summary['failed']}/{assertion_summary['checks']} checks failed)"
+                )
             console.print(f"  Total Cost: ${total_cost:.4f}")
             console.print(f"  Total Time: {total_latency:.0f}ms")
             console.print()

@@ -4,6 +4,7 @@ from typing import Any, Dict, List, Optional
 
 from pydantic import BaseModel, ConfigDict, Field
 
+from promptlens.models.assertions import Assertion
 from promptlens.models.tools import ToolDefinition, ExpectedToolCall
 
 
@@ -22,6 +23,8 @@ class TestCase(BaseModel):
         expected_tool_calls: Expected tool calls the LLM should make
         evaluation_mode: Evaluation mode (standard/tool_only/tool_and_answer)
         tool_execution: Whether to actually execute tools (default: False)
+        assertions: Deterministic checks (contains, regex, is_json, max_length, ...)
+            evaluated locally against the response before the LLM judge runs
     """
 
     id: str
@@ -31,6 +34,13 @@ class TestCase(BaseModel):
     tags: List[str] = Field(default_factory=list)
     metadata: Dict[str, Any] = Field(default_factory=dict)
     reference_answer: Optional[str] = None
+    assertions: List[Assertion] = Field(
+        default_factory=list,
+        description=(
+            "Deterministic checks run locally against the response, with no model call. "
+            "All assertions must pass for the test case to count as passing."
+        ),
+    )
 
     # Tool calling evaluation fields (optional, for backward compatibility)
     tools: List[ToolDefinition] = Field(

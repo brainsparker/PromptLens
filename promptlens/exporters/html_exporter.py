@@ -73,6 +73,8 @@ class HTMLExporter(BaseExporter):
             scores = [r.judge_score.score for r in model_results if r.judge_score]
             score_dist = {i: scores.count(i) for i in range(1, 6)}
 
+            assertion_summary = result.get_assertion_summary(model)
+
             model_stats.append({
                 "name": model,
                 "average_score": avg_score,
@@ -80,6 +82,12 @@ class HTMLExporter(BaseExporter):
                 "total_latency": total_latency,
                 "score_distribution": score_dist,
                 "result_count": len(model_results),
+                "assertion_cases": assertion_summary["cases"],
+                "assertion_cases_passed": (
+                    assertion_summary["cases"] - assertion_summary["cases_failed"]
+                ),
+                "assertion_checks": assertion_summary["checks"],
+                "assertion_checks_failed": assertion_summary["failed"],
             })
 
         # Group results by test case
@@ -101,8 +109,21 @@ class HTMLExporter(BaseExporter):
                     "explanation": (
                         eval_result.judge_score.explanation
                         if eval_result.judge_score
-                        else "No score available"
+                        else (
+                            f"Judge skipped: {eval_result.judge_skipped_reason}"
+                            if eval_result.judge_skipped_reason
+                            else "No score available"
+                        )
                     ),
+                    "assertions": [
+                        {
+                            "label": assertion_result.label,
+                            "passed": assertion_result.passed,
+                            "message": assertion_result.message,
+                        }
+                        for assertion_result in eval_result.assertion_results
+                    ],
+                    "assertions_passed": eval_result.assertions_passed,
                     "latency_ms": eval_result.model_response.latency_ms,
                     "cost_usd": eval_result.model_response.cost_usd or 0.0,
                     "error": eval_result.model_response.error,

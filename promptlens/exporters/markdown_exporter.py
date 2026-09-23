@@ -81,6 +81,13 @@ class MarkdownExporter(BaseExporter):
             lines.append("|--------|-------|")
             if avg_score is not None:
                 lines.append(f"| Average Score | {avg_score:.2f}/5.0 |")
+            assertion_summary = result.get_assertion_summary(model)
+            if assertion_summary["cases"]:
+                passed_cases = assertion_summary["cases"] - assertion_summary["cases_failed"]
+                lines.append(
+                    f"| Assertions | {passed_cases}/{assertion_summary['cases']} cases passed "
+                    f"({assertion_summary['failed']}/{assertion_summary['checks']} checks failed) |"
+                )
             lines.append(f"| Total Cost | ${total_cost:.4f} |")
             lines.append(f"| Total Time | {total_latency:.0f}ms |")
             lines.append("")
@@ -105,8 +112,8 @@ class MarkdownExporter(BaseExporter):
             lines.append("")
 
             # Results table
-            lines.append("| Model | Score | Latency | Cost | Response |")
-            lines.append("|-------|-------|---------|------|----------|")
+            lines.append("| Model | Score | Assertions | Latency | Cost | Response |")
+            lines.append("|-------|-------|------------|---------|------|----------|")
 
             for eval_result in evals:
                 score = (
@@ -114,6 +121,14 @@ class MarkdownExporter(BaseExporter):
                     if eval_result.judge_score
                     else "N/A"
                 )
+                if eval_result.assertions_passed is None:
+                    assertions = "-"
+                else:
+                    passed_count = len(eval_result.assertion_results) - len(
+                        eval_result.failed_assertions
+                    )
+                    marker = "PASS" if eval_result.assertions_passed else "FAIL"
+                    assertions = f"{marker} {passed_count}/{len(eval_result.assertion_results)}"
                 latency = f"{eval_result.model_response.latency_ms:.0f}ms"
                 cost = f"${eval_result.model_response.cost_usd:.4f}" if eval_result.model_response.cost_usd else "$0.00"
                 response = eval_result.model_response.content[:100].replace("\n", " ")
@@ -121,8 +136,22 @@ class MarkdownExporter(BaseExporter):
                     response = f"ERROR: {eval_result.model_response.error}"
 
                 lines.append(
-                    f"| {eval_result.model_response.model} | {score} | {latency} | {cost} | {response}... |"
+                    f"| {eval_result.model_response.model} | {score} | {assertions} | "
+                    f"{latency} | {cost} | {response}... |"
                 )
+
+            failed_lines = []
+            for eval_result in evals:
+                for failed in eval_result.failed_assertions:
+                    failed_lines.append(
+                        f"- **{eval_result.model_response.model}** failed `{failed.label}`: "
+                        f"{failed.message}"
+                    )
+            if failed_lines:
+                lines.append("")
+                lines.append("**Failed assertions:**")
+                lines.append("")
+                lines.extend(failed_lines)
 
             lines.append("")
 

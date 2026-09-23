@@ -27,3 +27,11 @@ def test_output_formats_reject_unsupported_values() -> None:
 def test_run_config_requires_at_least_one_model() -> None:
     with pytest.raises(ValidationError):
         RunConfig(golden_set="./tests.yaml", models=[])
+
+
+def test_output_formats_accept_junit():
+    """junit is a documented export format and must pass config validation."""
+    from promptlens.models.config import OutputConfig
+
+    config = OutputConfig(formats=["html", "JUnit"])
+    assert config.formats == ["html", "junit"]
