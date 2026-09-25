@@ -16,6 +16,7 @@ from rich.progress import (
     TimeElapsedColumn,
 )
 
+from promptlens.assertions import run_assertions
 from promptlens.judges.llm_judge import LLMJudge
 from promptlens.loaders.yaml_loader import get_loader
 from promptlens.models.config import RunConfig
@@ -44,8 +45,9 @@ class Runner:
         self.config = config
         self.run_id = str(uuid.uuid4())[:8]
 
-        # Initialize judge
-        self.judge = LLMJudge(config.judge)
+        # The judge is created on first use so that golden sets made entirely
+        # of assertions_only test cases run without any judge credentials.
+        self._judge: Optional[LLMJudge] = None
 
         # Initialize providers for each model
         self.providers: List[BaseProvider] = []
@@ -65,6 +67,13 @@ class Runner:
 
         # Semaphore for rate limiting
         self.semaphore = asyncio.Semaphore(config.execution.parallel_requests)
+
+    @property
+    def judge(self) -> LLMJudge:
+        """The LLM judge, created lazily on first access."""
+        if self._judge is None:
+            self._judge = LLMJudge(self.config.judge)
+        return self._judge
 
     async def run(self) -> RunResult:
         """Run the complete evaluation.
@@ -215,9 +224,21 @@ class Runner:
                 timeout_seconds=self.config.execution.timeout_seconds,
             )
 
-            # Judge the response (only if generation succeeded)
+            # Deterministic assertions run first: local, free, no judge needed
+            assertion_results = run_assertions(test_case, model_response)
+            any_assertion_failed = any(not r.passed for r in assertion_results)
+
+            # Judge the response (only if generation succeeded and the
+            # test case or config does not opt out of judging)
             judge_score = None
-            if not model_response.error:
+            judge_skipped_reason = None
+            if model_response.error:
+                pass
+            elif test_case.evaluation_mode == "assertions_only":
+                judge_skipped_reason = "assertions_only"
+            elif self.config.judge.skip_on_assertion_failure and any_assertion_failed:
+                judge_skipped_reason = "assertion_failure"
+            else:
                 try:
                     judge_score = await self.judge.evaluate(test_case, model_response)
                 except Exception as e:
@@ -232,6 +253,8 @@ class Runner:
                 expected_behavior=test_case.expected_behavior,
                 model_response=model_response,
                 judge_score=judge_score,
+                assertion_results=assertion_results,
+                judge_skipped_reason=judge_skipped_reason,
                 timestamp=datetime.utcnow(),
             )
 
@@ -252,6 +275,18 @@ class Runner:
             console.print(f"[bold]{model}[/bold]")
             if avg_score is not None:
                 console.print(f"  Average Score: {avg_score:.2f}/5.0")
+            pass_rate = result.get_assertion_pass_rate(model)
+            if pass_rate is not None:
+                asserted = [
+                    r for r in result.results
+                    if r.model_response.model == model and r.assertions_passed is not None
+                ]
+                passed = sum(1 for r in asserted if r.assertions_passed)
+                color = "green" if passed == len(asserted) else "red"
+                console.print(
+                    f"  Assertions: [{color}]{passed}/{len(asserted)} passed[/{color}] "
+                    f"({pass_rate * 100:.0f}%)"
+                )
             console.print(f"  Total Cost: ${total_cost:.4f}")
             console.print(f"  Total Time: {total_latency:.0f}ms")
             console.print()

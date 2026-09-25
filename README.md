@@ -17,6 +17,7 @@ PromptLens runs golden test sets against multiple models, scores outputs using L
 
 - **Multi-Provider Support** - Test Anthropic (Claude), OpenAI (GPT), Google (Gemini), You.com, and local models (Ollama, LM Studio)
 - **Tool/Function Calling Evaluation** - Test tool usage with automatic + LLM judge scoring across 5 criteria
+- **Deterministic Assertions** - Judge-free checks (contains, regex, exact match, JSON schema, length and latency bounds) that run locally before the judge, gate CI with `--fail-on-assertions`, and work with keyless local models
 - **LLM-as-Judge Scoring** - Automated evaluation using another LLM with configurable criteria
 - **Cost & Latency Tracking** - Monitor per-query costs and response times across models
 - **Beautiful Reports** - Interactive HTML reports with charts, comparisons, and detailed results
@@ -164,6 +165,9 @@ promptlens run <config.yaml>
 
 # Validate a golden set
 promptlens validate <golden_set.yaml>
+
+# Fail the build if any deterministic assertion fails (no judge needed)
+promptlens run <config.yaml> --fail-on-assertions
 
 # List past runs
 promptlens list-runs
@@ -489,6 +493,64 @@ Evaluate multi-step agent workflows:
 2. Implement agent logic
 3. Evaluate with PromptLens
 4. Iterate on tools and prompting
+
+### Deterministic Assertions
+
+Not every check needs a judge. Assertions are cheap, local, judge-free checks declared per test case. They run before the LLM judge, cost no tokens, and produce a hard pass/fail you can gate CI on. They work with every provider, including keyless local models.
+
+```yaml
+- id: "assert-001"
+  query: "Classify this review and return only JSON with keys sentiment and confidence."
+  expected_behavior: "Valid JSON, positive sentiment"
+  assertions:
+    - type: json_valid
+    - type: json_schema
+      value:
+        type: object
+        required: ["sentiment", "confidence"]
+        properties:
+          sentiment: { enum: ["positive", "neutral", "negative"] }
+          confidence: { type: number, minimum: 0, maximum: 1 }
+    - type: not_contains
+      value: "as an AI"
+      case_sensitive: false
+    - type: max_latency_ms
+      value: 4000
+
+- id: "assert-002"
+  query: "Reply with exactly the word OK."
+  expected_behavior: "Replies OK"
+  evaluation_mode: assertions_only   # no judge call at all
+  assertions:
+    - type: equals
+      value: "OK"
+      case_sensitive: false
+```
+
+**Assertion types:**
+
+| Type | Value | Passes when |
+|------|-------|-------------|
+| `contains` / `not_contains` | string | substring is present / absent |
+| `regex` / `not_regex` | pattern | `re.search` matches / does not match |
+| `equals` | string | whitespace-trimmed response equals the value |
+| `starts_with` / `ends_with` | string | response starts / ends with the value |
+| `json_valid` | none | response parses as JSON (a Markdown code fence is tolerated) |
+| `json_schema` | JSON Schema mapping | response is JSON and validates against the schema (`pip install promptlens[schema]`) |
+| `min_chars` / `max_chars` | integer | response length is within the bound |
+| `max_latency_ms` | number | model latency is at or under the bound |
+
+Text checks accept `case_sensitive: false`. Every assertion accepts an optional `description` shown in reports. Invalid patterns and schemas are rejected by `promptlens validate` before any model is called.
+
+**How assertions interact with the judge:**
+
+- By default the judge still scores every response, so you get both the hard pass/fail and the 1-5 quality score.
+- `evaluation_mode: assertions_only` on a test case skips the judge for that case. A golden set made only of such cases needs no judge credentials at all.
+- `judge.skip_on_assertion_failure: true` in the config skips the judge for responses that already failed a check, which saves judge tokens on known-bad outputs.
+
+**CI gate:** `promptlens run config.yaml --fail-on-assertions` exits with code 2 when any assertion fails, and can be combined with `--fail-under`. In the JUnit export, an assertion failure is reported as a `<failure type="AssertionFailed">` with the failing checks listed, regardless of judge score. HTML, Markdown, CSV and JSON exports all carry per-check results.
+
+See [`examples/golden_sets/assertions.yaml`](examples/golden_sets/assertions.yaml) and [`examples/configs/assertions_ci.yaml`](examples/configs/assertions_ci.yaml).
 
 ### Tool/Function Calling Evaluation
 

@@ -74,6 +74,18 @@ def _check_fail_under(result: "RunResult", fail_under: float) -> list:
     return failing
 
 
+def _check_assertion_failures(result: "RunResult") -> list:
+    """Collect results with at least one failed deterministic assertion.
+
+    Args:
+        result: Completed run result
+
+    Returns:
+        List of EvaluationResult objects that failed an assertion
+    """
+    return result.get_assertion_failures()
+
+
 def setup_logging(level: str = "INFO") -> None:
     """Set up logging configuration.
 
@@ -130,12 +142,22 @@ def cli(log_level: str) -> None:
         "failure threshold used by the junit export format."
     ),
 )
+@click.option(
+    "--fail-on-assertions",
+    is_flag=True,
+    help=(
+        "Quality gate for CI: exit with code 2 if any test case fails a "
+        "deterministic assertion (contains, regex, json_schema, ...). Needs no "
+        "judge and works with keyless local models."
+    ),
+)
 def run(
     config: str,
     golden_set: Optional[str],
     output_dir: Optional[str],
     dry_run: bool,
     fail_under: Optional[float],
+    fail_on_assertions: bool,
 ) -> None:
     """Run evaluation with the given configuration file.
 
@@ -146,6 +168,7 @@ def run(
         promptlens run config.yaml --output-dir ./results
         promptlens run config.yaml --dry-run
         promptlens run config.yaml --fail-under 3.5
+        promptlens run config.yaml --fail-on-assertions
     """
     try:
         # Load config
@@ -219,20 +242,46 @@ def run(
             html_path = run_output_dir / "report.html"
             console.print(f"\n[cyan]View report: file://{html_path.absolute()}[/cyan]")
 
-        # Quality gate for CI
+        # Quality gates for CI. Both gates are evaluated so the log shows
+        # every failure before the process exits.
+        gate_failed = False
+
+        if fail_on_assertions:
+            failing_results = _check_assertion_failures(result)
+            if failing_results:
+                gate_failed = True
+                console.print(
+                    f"\n[bold red]✗ Assertion gate failed (--fail-on-assertions): "
+                    f"{len(failing_results)} result(s) with failed checks[/bold red]"
+                )
+                for eval_result in failing_results:
+                    console.print(
+                        f"  {eval_result.test_case_id} [{eval_result.model_response.model}]"
+                    )
+                    for check in eval_result.failed_assertions:
+                        console.print(f"    - {check.label}: {check.message}")
+            else:
+                console.print(
+                    "\n[bold green]✓ Assertion gate passed (--fail-on-assertions)[/bold green]"
+                )
+
         if fail_under is not None:
             failing_models = _check_fail_under(result, fail_under)
             if failing_models:
+                gate_failed = True
                 console.print(
                     f"\n[bold red]✗ Quality gate failed (--fail-under {fail_under:g}):[/bold red]"
                 )
                 for model, avg in failing_models:
                     avg_display = f"{avg:.2f}" if avg is not None else "no scores"
                     console.print(f"  {model}: average judge score {avg_display}")
-                sys.exit(2)
-            console.print(
-                f"\n[bold green]✓ Quality gate passed (--fail-under {fail_under:g})[/bold green]"
-            )
+            else:
+                console.print(
+                    f"\n[bold green]✓ Quality gate passed (--fail-under {fail_under:g})[/bold green]"
+                )
+
+        if gate_failed:
+            sys.exit(2)
 
     except Exception as e:
         console.print(f"\n[bold red]Error:[/bold red] {e}")
@@ -267,10 +316,23 @@ def validate(golden_set: str) -> None:
         if golden_set_obj.description:
             console.print(f"  Description: {golden_set_obj.description}")
 
+        assertion_count = sum(len(tc.assertions) for tc in golden_set_obj.test_cases)
+        if assertion_count:
+            asserted_cases = sum(1 for tc in golden_set_obj.test_cases if tc.assertions)
+            console.print(
+                f"  Assertions: {assertion_count} across {asserted_cases} test case(s)"
+            )
+
         # Show test case IDs
         console.print(f"\n  Test Case IDs:")
         for tc in golden_set_obj.test_cases:
-            console.print(f"    - {tc.id}")
+            suffix = ""
+            if tc.assertions:
+                suffix = f" ({len(tc.assertions)} assertion(s)"
+                if tc.evaluation_mode == "assertions_only":
+                    suffix += ", no judge"
+                suffix += ")"
+            console.print(f"    - {tc.id}{suffix}")
 
     except Exception as e:
         console.print(f"[red]Validation failed: {e}[/red]")

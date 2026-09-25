@@ -2,8 +2,9 @@
 
 from typing import Any, Dict, List, Optional
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
+from promptlens.models.assertions import Assertion
 from promptlens.models.tools import ToolDefinition, ExpectedToolCall
 
 
@@ -20,8 +21,9 @@ class TestCase(BaseModel):
         reference_answer: Optional reference answer for comparison
         tools: Tools/functions available to the LLM for this test case
         expected_tool_calls: Expected tool calls the LLM should make
-        evaluation_mode: Evaluation mode (standard/tool_only/tool_and_answer)
+        evaluation_mode: Evaluation mode (standard/tool_only/tool_and_answer/assertions_only)
         tool_execution: Whether to actually execute tools (default: False)
+        assertions: Deterministic checks run locally before the LLM judge
     """
 
     id: str
@@ -43,12 +45,43 @@ class TestCase(BaseModel):
     )
     evaluation_mode: str = Field(
         default="standard",
-        description="Evaluation mode: 'standard' (no tools), 'tool_only' (only tool usage), or 'tool_and_answer' (both)"
+        description=(
+            "Evaluation mode: 'standard' (no tools), 'tool_only' (only tool usage), "
+            "'tool_and_answer' (both), or 'assertions_only' (deterministic checks, no LLM judge)"
+        ),
     )
     tool_execution: bool = Field(
         default=False,
         description="Whether to actually execute tools (default: False, evaluation only)"
     )
+
+    # Deterministic assertions (optional, for backward compatibility)
+    assertions: List[Assertion] = Field(
+        default_factory=list,
+        description=(
+            "Judge-free checks (contains, regex, equals, json_schema, length and latency "
+            "bounds) evaluated locally against the response"
+        ),
+    )
+
+    @field_validator("evaluation_mode")
+    @classmethod
+    def validate_evaluation_mode(cls, value: str) -> str:
+        allowed = {"standard", "tool_only", "tool_and_answer", "assertions_only"}
+        if value not in allowed:
+            raise ValueError(
+                f"evaluation_mode must be one of {sorted(allowed)}, got '{value}'"
+            )
+        return value
+
+    @model_validator(mode="after")
+    def validate_assertions_only_has_assertions(self) -> "TestCase":
+        if self.evaluation_mode == "assertions_only" and not self.assertions:
+            raise ValueError(
+                f"test case '{self.id}' uses evaluation_mode 'assertions_only' "
+                "but declares no assertions"
+            )
+        return self
 
     model_config = ConfigDict(json_schema_extra={
             "example": {

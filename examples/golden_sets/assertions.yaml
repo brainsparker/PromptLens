@@ -1,0 +1,83 @@
+name: "Deterministic Assertions"
+description: >
+  Judge-free checks that run locally against each response. Use them to gate
+  CI on facts you can verify without an LLM: required phrases, forbidden
+  content, output format, JSON shape, length and latency. Pair with
+  `promptlens run ... --fail-on-assertions`.
+version: "1.0"
+
+test_cases:
+  # Assertions plus the LLM judge (default). The judge still scores quality;
+  # the assertions catch hard failures deterministically.
+  - id: "assert-001"
+    query: "What is the capital of France? Answer in one sentence."
+    expected_behavior: "States that Paris is the capital of France, concisely"
+    category: "factual"
+    tags: ["assertions", "contains"]
+    assertions:
+      - type: contains
+        value: "Paris"
+      - type: not_contains
+        value: "I don't know"
+        case_sensitive: false
+      - type: max_chars
+        value: 200
+        description: "One sentence, not an essay"
+
+  # Format contract: the response must be JSON with a specific shape.
+  # json_schema needs the optional extra: pip install promptlens[schema]
+  - id: "assert-002"
+    query: >
+      Classify the sentiment of this review as positive, neutral, or negative
+      and return only JSON with keys "sentiment" and "confidence" (0 to 1):
+      "The battery lasts all day and the screen is gorgeous."
+    expected_behavior: "Returns valid JSON with a positive sentiment and a confidence score"
+    category: "structured_output"
+    tags: ["assertions", "json"]
+    assertions:
+      - type: json_valid
+      - type: json_schema
+        value:
+          type: object
+          required: ["sentiment", "confidence"]
+          properties:
+            sentiment:
+              type: string
+              enum: ["positive", "neutral", "negative"]
+            confidence:
+              type: number
+              minimum: 0
+              maximum: 1
+          additionalProperties: false
+      - type: regex
+        value: '"sentiment"\s*:\s*"positive"'
+
+  # assertions_only: no judge call at all. Runs with keyless local models and
+  # costs nothing beyond the model response itself.
+  - id: "assert-003"
+    query: "Reply with exactly the word OK and nothing else."
+    expected_behavior: "Replies with OK"
+    category: "instruction_following"
+    tags: ["assertions", "exact"]
+    evaluation_mode: assertions_only
+    assertions:
+      - type: equals
+        value: "OK"
+        case_sensitive: false
+      - type: max_latency_ms
+        value: 5000
+
+  - id: "assert-004"
+    query: "Write a haiku about the sea. Do not include a title."
+    expected_behavior: "Three short lines about the sea, no title"
+    category: "creative"
+    tags: ["assertions", "regex"]
+    assertions:
+      - type: not_regex
+        value: '^\s*(title|#)'
+        case_sensitive: false
+        description: "No title line"
+      - type: min_chars
+        value: 20
+      - type: max_chars
+        value: 400

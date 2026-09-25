@@ -7,10 +7,14 @@ evaluated golden-set entry.
 
 Mapping rules:
     - A test case whose model response errored is reported as an <error>.
+    - A test case that failed any deterministic assertion is reported as a
+      <failure> (type AssertionFailed), regardless of judge score.
     - A test case whose judge score is below the failure threshold is
       reported as a <failure>.
-    - A test case that was never judged (judging disabled or judge failed)
-      is reported as <skipped>, so CI does not report a false pass.
+    - A test case that was never judged and carries no assertions (judging
+      disabled or judge failed) is reported as <skipped>, so CI does not
+      report a false pass. A test case whose assertions all passed is a pass
+      even without a judge score (assertions_only mode).
     - Everything else is a pass.
 """
 
@@ -126,6 +130,7 @@ class JUnitXMLExporter(BaseExporter):
 
             response_error = eval_result.model_response.error
             judge_score = eval_result.judge_score
+            failed_assertions = eval_result.failed_assertions
 
             if response_error:
                 errors += 1
@@ -133,6 +138,27 @@ class JUnitXMLExporter(BaseExporter):
                 error_el.set("message", _truncate(response_error, 300))
                 error_el.set("type", "ModelResponseError")
                 error_el.text = response_error
+            elif failed_assertions:
+                failures += 1
+                failure_el = ET.SubElement(testcase, "failure")
+                failure_el.set(
+                    "message",
+                    f"{len(failed_assertions)} of {len(eval_result.assertion_results)} "
+                    "assertion(s) failed",
+                )
+                failure_el.set("type", "AssertionFailed")
+                detail_lines = [
+                    f"Query: {_truncate(eval_result.query, 500)}",
+                    f"Response: {_truncate(eval_result.model_response.content, 500)}",
+                ]
+                for check in failed_assertions:
+                    detail_lines.append(f"FAILED {check.label}: {check.message}")
+                if judge_score is not None:
+                    detail_lines.append(f"Judge score: {judge_score.score}")
+                failure_el.text = "\n".join(detail_lines)
+            elif judge_score is None and eval_result.assertions_passed is True:
+                # assertions_only, or the judge failed but every check passed
+                pass
             elif judge_score is None:
                 skipped += 1
                 skipped_el = ET.SubElement(testcase, "skipped")
@@ -168,6 +194,11 @@ class JUnitXMLExporter(BaseExporter):
                 out_lines.append(
                     f"judge_explanation: {_truncate(judge_score.explanation, 500)}"
                 )
+            elif eval_result.judge_skipped_reason:
+                out_lines.append(f"judge_skipped: {eval_result.judge_skipped_reason}")
+            for check in eval_result.assertion_results:
+                status = "PASS" if check.passed else "FAIL"
+                out_lines.append(f"assertion {status} {check.label}: {check.message}")
             system_out.text = "\n".join(out_lines)
 
         suite.set("tests", str(len(model_results)))
@@ -185,6 +216,9 @@ class JUnitXMLExporter(BaseExporter):
         avg_score = result.get_average_score(model)
         if avg_score is not None:
             _add_property(properties, "average_judge_score", f"{avg_score:.2f}")
+        pass_rate = result.get_assertion_pass_rate(model)
+        if pass_rate is not None:
+            _add_property(properties, "assertion_pass_rate", f"{pass_rate:.4f}")
         _add_property(
             properties, "total_cost_usd", f"{result.get_total_cost(model):.6f}"
         )

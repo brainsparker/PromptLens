@@ -98,6 +98,13 @@ class JudgeConfig(BaseModel):
     temperature: float = 0.3
     custom_prompt: Optional[str] = None
     criteria: List[str] = Field(default_factory=lambda: ["accuracy", "helpfulness"])
+    skip_on_assertion_failure: bool = Field(
+        default=False,
+        description=(
+            "When true, a response that fails any deterministic assertion is not sent "
+            "to the LLM judge. Saves judge tokens on responses that are already known bad."
+        ),
+    )
 
 
 class ExecutionConfig(BaseModel):
@@ -160,7 +167,7 @@ class OutputConfig(BaseModel):
     @field_validator("formats")
     @classmethod
     def validate_formats(cls, value: List[str]) -> List[str]:
-        allowed = {"html", "json", "csv", "md"}
+        allowed = {"html", "json", "csv", "md", "junit"}
         normalized = [fmt.lower() for fmt in value]
         invalid = sorted({fmt for fmt in normalized if fmt not in allowed})
         if invalid:

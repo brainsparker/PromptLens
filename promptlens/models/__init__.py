@@ -1,6 +1,7 @@
 """Data models for PromptLens."""
 
 from promptlens.models.test_case import TestCase, GoldenSet
+from promptlens.models.assertions import Assertion, AssertionResult
 from promptlens.models.result import (
     ModelResponse,
     JudgeScore,
@@ -24,6 +25,8 @@ from promptlens.models.config import (
 __all__ = [
     "TestCase",
     "GoldenSet",
+    "Assertion",
+    "AssertionResult",
     "ModelResponse",
     "JudgeScore",
     "EvaluationResult",

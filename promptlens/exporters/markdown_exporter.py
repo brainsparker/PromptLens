@@ -81,6 +81,9 @@ class MarkdownExporter(BaseExporter):
             lines.append("|--------|-------|")
             if avg_score is not None:
                 lines.append(f"| Average Score | {avg_score:.2f}/5.0 |")
+            pass_rate = result.get_assertion_pass_rate(model)
+            if pass_rate is not None:
+                lines.append(f"| Assertions Passed | {pass_rate * 100:.0f}% |")
             lines.append(f"| Total Cost | ${total_cost:.4f} |")
             lines.append(f"| Total Time | {total_latency:.0f}ms |")
             lines.append("")
@@ -105,8 +108,13 @@ class MarkdownExporter(BaseExporter):
             lines.append("")
 
             # Results table
-            lines.append("| Model | Score | Latency | Cost | Response |")
-            lines.append("|-------|-------|---------|------|----------|")
+            has_assertions = any(e.assertion_results for e in evals)
+            if has_assertions:
+                lines.append("| Model | Score | Checks | Latency | Cost | Response |")
+                lines.append("|-------|-------|--------|---------|------|----------|")
+            else:
+                lines.append("| Model | Score | Latency | Cost | Response |")
+                lines.append("|-------|-------|---------|------|----------|")
 
             for eval_result in evals:
                 score = (
@@ -120,9 +128,25 @@ class MarkdownExporter(BaseExporter):
                 if eval_result.model_response.error:
                     response = f"ERROR: {eval_result.model_response.error}"
 
-                lines.append(
-                    f"| {eval_result.model_response.model} | {score} | {latency} | {cost} | {response}... |"
-                )
+                if has_assertions:
+                    checks = _format_checks(eval_result)
+                    lines.append(
+                        f"| {eval_result.model_response.model} | {score} | {checks} | "
+                        f"{latency} | {cost} | {response}... |"
+                    )
+                else:
+                    lines.append(
+                        f"| {eval_result.model_response.model} | {score} | {latency} | {cost} | {response}... |"
+                    )
+
+            # Failed check details, so the Markdown report is actionable on its own
+            for eval_result in evals:
+                failed = eval_result.failed_assertions
+                if failed:
+                    lines.append("")
+                    lines.append(f"Failed checks for `{eval_result.model_response.model}`:")
+                    for check in failed:
+                        lines.append(f"- {check.label}: {check.message}")
 
             lines.append("")
 
@@ -141,3 +165,12 @@ class MarkdownExporter(BaseExporter):
             ".md"
         """
         return ".md"
+
+
+def _format_checks(eval_result) -> str:
+    """Render an assertion summary cell such as ``3/4 passed``."""
+    results = eval_result.assertion_results
+    if not results:
+        return "N/A"
+    passed = sum(1 for r in results if r.passed)
+    return f"{passed}/{len(results)} passed"

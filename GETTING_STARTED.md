@@ -272,6 +272,26 @@ python3 -m promptlens run regression_config.yaml
 
 6. Fix any regressions before deploying
 
+**Make the hard rules deterministic.** Some regressions do not need a judge to spot: a required phrase went missing, the output stopped being valid JSON, a response got too long. Declare those as `assertions` on the test case and gate the build on them:
+
+```yaml
+  - id: "product-003"
+    query: "Return the Pro plan price as JSON with a single key price_usd."
+    expected_behavior: "Valid JSON with the numeric price"
+    assertions:
+      - type: json_valid
+      - type: regex
+        value: '"price_usd"\s*:\s*\d+'
+      - type: max_chars
+        value: 120
+```
+
+```bash
+python3 -m promptlens run regression_config.yaml --fail-on-assertions --fail-under 3.5
+```
+
+Assertions run locally, cost nothing, and work with keyless local models. Exit code 2 means a check or the score gate failed; the JUnit export lists which checks failed for each test case. See the README section "Deterministic Assertions" for the full list of assertion types.
+
 ---
 
 ### Use Case 4: Cost Optimization

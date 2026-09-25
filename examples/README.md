@@ -44,6 +44,12 @@ Configuration files define how evaluations are run, including which models to te
    - Useful for cost-effective testing and privacy-sensitive use cases
    - Requires Ollama running locally
 
+4. **`assertions_ci.yaml`** - Deterministic assertions as a CI gate
+   - Runs `golden_sets/assertions.yaml`: contains, regex, JSON schema, exact match, length and latency checks
+   - `judge.skip_on_assertion_failure: true` so the judge only scores responses that passed their checks
+   - Run with `--fail-on-assertions` (and optionally `--fail-under`) and export `junit` for CI test summaries
+   - `json_schema` assertions need `pip install promptlens[schema]`
+
 ## Quick Start
 
 ### 1. Set up API keys

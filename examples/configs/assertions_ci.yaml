@@ -1,0 +1,33 @@
+# CI-oriented config: deterministic assertions gate the build, the judge
+# scores quality only on responses that passed their checks.
+#
+#   promptlens run examples/configs/assertions_ci.yaml --fail-on-assertions --fail-under 3.5
+#
+# Exit code 2 if any assertion fails or any model's average judge score is
+# below 3.5. Use output format `junit` to surface individual failures in
+# GitHub Actions, GitLab, Jenkins or CircleCI test summaries.
+
+golden_set: ./examples/golden_sets/assertions.yaml
+
+models:
+  - name: "Claude 3.5 Sonnet"
+    provider: anthropic
+    model: claude-3-5-sonnet-20241022
+    temperature: 0.2
+    max_tokens: 512
+
+judge:
+  provider: anthropic
+  model: claude-3-5-sonnet-20241022
+  temperature: 0.3
+  # Do not spend judge tokens on responses that already failed a check
+  skip_on_assertion_failure: true
+
+execution:
+  parallel_requests: 3
+  retry_attempts: 2
+
+output:
+  directory: ./promptlens_results
+  formats: [html, json, junit]
+  run_name: "Assertions CI"
