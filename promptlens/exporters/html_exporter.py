@@ -73,6 +73,7 @@ class HTMLExporter(BaseExporter):
             scores = [r.judge_score.score for r in model_results if r.judge_score]
             score_dist = {i: scores.count(i) for i in range(1, 6)}
 
+            asserted = [r for r in model_results if r.assertions_passed is not None]
             model_stats.append({
                 "name": model,
                 "average_score": avg_score,
@@ -80,6 +81,9 @@ class HTMLExporter(BaseExporter):
                 "total_latency": total_latency,
                 "score_distribution": score_dist,
                 "result_count": len(model_results),
+                "assertion_pass_rate": result.get_assertion_pass_rate(model),
+                "assertion_passed_count": sum(1 for r in asserted if r.assertions_passed),
+                "assertion_total_count": len(asserted),
             })
 
         # Group results by test case
@@ -101,15 +105,23 @@ class HTMLExporter(BaseExporter):
                     "explanation": (
                         eval_result.judge_score.explanation
                         if eval_result.judge_score
-                        else "No score available"
+                        else _no_score_text(eval_result)
                     ),
                     "latency_ms": eval_result.model_response.latency_ms,
                     "cost_usd": eval_result.model_response.cost_usd or 0.0,
                     "error": eval_result.model_response.error,
+                    "assertions": [
+                        {"label": a.label, "passed": a.passed, "message": a.message}
+                        for a in eval_result.assertion_results
+                    ],
+                    "assertions_passed": eval_result.assertions_passed,
                 }
             )
 
+        has_assertions = any(r.assertion_results for r in result.results)
+
         return {
+            "has_assertions": has_assertions,
             "run_id": result.run_id,
             "run_name": result.run_name or "Unnamed Run",
             "timestamp": result.timestamp.strftime("%Y-%m-%d %H:%M:%S UTC"),
@@ -131,3 +143,13 @@ class HTMLExporter(BaseExporter):
             ".html"
         """
         return ".html"
+
+
+def _no_score_text(eval_result) -> str:
+    """Explain an absent judge score in the report."""
+    reason = eval_result.judge_skipped_reason
+    if reason == "assertions_only":
+        return "Judge not run: test case is assertions_only"
+    if reason == "assertion_failure":
+        return "Judge skipped: a deterministic assertion failed (judge.skip_on_assertion_failure)"
+    return "No score available"

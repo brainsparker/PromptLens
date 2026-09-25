@@ -3,8 +3,9 @@
 from datetime import datetime
 from typing import Any, Dict, List, Optional
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, computed_field
 
+from promptlens.models.assertions import AssertionResult
 from promptlens.models.tools import ToolCall, ToolCallEvaluation
 
 
@@ -94,6 +95,8 @@ class EvaluationResult(BaseModel):
         expected_behavior: What was expected
         model_response: The model's response with metadata
         judge_score: Score from the judge (if judging was performed)
+        assertion_results: Outcomes of the test case's deterministic assertions
+        judge_skipped_reason: Why the LLM judge did not run, if it did not
         timestamp: When the evaluation was performed
     """
 
@@ -102,7 +105,28 @@ class EvaluationResult(BaseModel):
     expected_behavior: str
     model_response: ModelResponse
     judge_score: Optional[JudgeScore] = None
+    assertion_results: List[AssertionResult] = Field(
+        default_factory=list,
+        description="Results of deterministic assertions, in declaration order",
+    )
+    judge_skipped_reason: Optional[str] = Field(
+        None,
+        description="Set when the LLM judge was intentionally not run for this result",
+    )
     timestamp: datetime = Field(default_factory=datetime.utcnow)
+
+    @computed_field  # type: ignore[misc]
+    @property
+    def assertions_passed(self) -> Optional[bool]:
+        """True if every assertion passed, False if any failed, None if none ran."""
+        if not self.assertion_results:
+            return None
+        return all(r.passed for r in self.assertion_results)
+
+    @property
+    def failed_assertions(self) -> List[AssertionResult]:
+        """The assertions that failed for this result."""
+        return [r for r in self.assertion_results if not r.passed]
 
 
 class RunResult(BaseModel):
@@ -177,3 +201,36 @@ class RunResult(BaseModel):
             filtered_results = [r for r in self.results if r.model_response.model == model]
 
         return sum(r.model_response.latency_ms for r in filtered_results)
+
+    def get_assertion_pass_rate(self, model: Optional[str] = None) -> Optional[float]:
+        """Fraction of asserted results where every assertion passed.
+
+        Args:
+            model: Optional model name to filter by
+
+        Returns:
+            Pass rate in [0, 1], or None if no result carried assertions
+        """
+        filtered_results = self.results
+        if model:
+            filtered_results = [r for r in self.results if r.model_response.model == model]
+
+        outcomes = [r.assertions_passed for r in filtered_results if r.assertions_passed is not None]
+        if not outcomes:
+            return None
+        return sum(1 for passed in outcomes if passed) / len(outcomes)
+
+    def get_assertion_failures(self, model: Optional[str] = None) -> List["EvaluationResult"]:
+        """Results with at least one failed assertion.
+
+        Args:
+            model: Optional model name to filter by
+
+        Returns:
+            Failing EvaluationResult objects
+        """
+        filtered_results = self.results
+        if model:
+            filtered_results = [r for r in self.results if r.model_response.model == model]
+
+        return [r for r in filtered_results if r.assertions_passed is False]
