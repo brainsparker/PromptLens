@@ -73,6 +73,8 @@ class HTMLExporter(BaseExporter):
             scores = [r.judge_score.score for r in model_results if r.judge_score]
             score_dist = {i: scores.count(i) for i in range(1, 6)}
 
+            assertions = result.get_assertion_summary(model)
+
             model_stats.append({
                 "name": model,
                 "average_score": avg_score,
@@ -80,6 +82,11 @@ class HTMLExporter(BaseExporter):
                 "total_latency": total_latency,
                 "score_distribution": score_dist,
                 "result_count": len(model_results),
+                "assertion_cases": assertions.cases_with_assertions,
+                "assertion_cases_passed": assertions.cases_passed,
+                "assertion_cases_failed": assertions.cases_failed,
+                "assertions_total": assertions.assertions_total,
+                "assertions_failed": assertions.assertions_failed,
             })
 
         # Group results by test case
@@ -101,13 +108,24 @@ class HTMLExporter(BaseExporter):
                     "explanation": (
                         eval_result.judge_score.explanation
                         if eval_result.judge_score
-                        else "No score available"
+                        else (eval_result.judge_skipped_reason or "No score available")
                     ),
                     "latency_ms": eval_result.model_response.latency_ms,
                     "cost_usd": eval_result.model_response.cost_usd or 0.0,
                     "error": eval_result.model_response.error,
+                    "assertions": [
+                        {
+                            "name": a.name,
+                            "passed": a.passed,
+                            "message": a.message,
+                        }
+                        for a in eval_result.assertion_results
+                    ],
+                    "assertions_passed": eval_result.assertions_passed,
                 }
             )
+
+        overall_assertions = result.get_assertion_summary()
 
         return {
             "run_id": result.run_id,
@@ -121,6 +139,10 @@ class HTMLExporter(BaseExporter):
             "model_stats": model_stats,
             "test_cases": list(test_case_results.values()),
             "models": result.models_tested,
+            "has_assertions": overall_assertions.cases_with_assertions > 0,
+            "assertion_cases": overall_assertions.cases_with_assertions,
+            "assertion_cases_passed": overall_assertions.cases_passed,
+            "assertion_cases_failed": overall_assertions.cases_failed,
         }
 
     @property

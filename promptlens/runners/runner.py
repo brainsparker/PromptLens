@@ -16,6 +16,7 @@ from rich.progress import (
     TimeElapsedColumn,
 )
 
+from promptlens.assertions import run_assertions
 from promptlens.judges.llm_judge import LLMJudge
 from promptlens.loaders.yaml_loader import get_loader
 from promptlens.models.config import RunConfig
@@ -215,9 +216,31 @@ class Runner:
                 timeout_seconds=self.config.execution.timeout_seconds,
             )
 
-            # Judge the response (only if generation succeeded)
+            # Deterministic assertions run first: no model call, no cost.
+            # They are skipped when generation failed, since the error is
+            # already the verdict for that case.
+            assertion_results = []
+            if test_case.assertions and not model_response.error:
+                assertion_results = run_assertions(test_case.assertions, model_response)
+
+            assertions_failed = any(not r.passed for r in assertion_results)
+            judge_skipped_reason = None
+
+            # Judge the response (only if generation succeeded, and unless a
+            # failed assertion already settled the case)
             judge_score = None
-            if not model_response.error:
+            if model_response.error:
+                pass
+            elif assertions_failed and not self.config.execution.judge_on_assertion_failure:
+                failed_names = [r.name for r in assertion_results if not r.passed]
+                judge_skipped_reason = (
+                    "skipped: failed assertion(s) " + ", ".join(failed_names)
+                )
+                logger.info(
+                    f"Skipping judge for '{test_case.id}' on "
+                    f"{model_response.model}: {judge_skipped_reason}"
+                )
+            else:
                 try:
                     judge_score = await self.judge.evaluate(test_case, model_response)
                 except Exception as e:
@@ -232,6 +255,8 @@ class Runner:
                 expected_behavior=test_case.expected_behavior,
                 model_response=model_response,
                 judge_score=judge_score,
+                assertion_results=assertion_results,
+                judge_skipped_reason=judge_skipped_reason,
                 timestamp=datetime.utcnow(),
             )
 
@@ -252,6 +277,15 @@ class Runner:
             console.print(f"[bold]{model}[/bold]")
             if avg_score is not None:
                 console.print(f"  Average Score: {avg_score:.2f}/5.0")
+            assertions = result.get_assertion_summary(model)
+            if assertions.cases_with_assertions:
+                color = "green" if not assertions.cases_failed else "red"
+                console.print(
+                    f"  Assertions: [{color}]{assertions.cases_passed}/"
+                    f"{assertions.cases_with_assertions} cases passed[/{color}] "
+                    f"({assertions.assertions_failed} of {assertions.assertions_total} "
+                    f"checks failed)"
+                )
             console.print(f"  Total Cost: ${total_cost:.4f}")
             console.print(f"  Total Time: {total_latency:.0f}ms")
             console.print()
@@ -261,4 +295,23 @@ class Runner:
         console.print(f"  Total Cost: ${result.total_cost_usd:.4f}")
         console.print(f"  Total Time: {result.total_time_ms:.0f}ms")
         console.print(f"  Test Cases: {len(result.results) // len(result.models_tested)}")
+        overall_assertions = result.get_assertion_summary()
+        if overall_assertions.cases_with_assertions:
+            console.print(
+                f"  Assertions: {overall_assertions.cases_passed}/"
+                f"{overall_assertions.cases_with_assertions} cases passed"
+            )
         console.print()
+
+        # List every failed assertion so CI logs show what broke without
+        # opening the report.
+        failures = result.get_assertion_failures()
+        if failures:
+            console.print("[bold red]Failed assertions[/bold red]")
+            for eval_result in failures:
+                for assertion in eval_result.failed_assertions:
+                    console.print(
+                        f"  {eval_result.test_case_id} [{eval_result.model_response.model}] "
+                        f"{assertion.name}: {assertion.message}"
+                    )
+            console.print()

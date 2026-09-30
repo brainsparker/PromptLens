@@ -23,6 +23,10 @@ Golden sets are collections of test cases used to evaluate LLM performance. Each
    - 5 test cases for different summarization styles
    - Topics: bullet points, one-sentence summaries, comparisons, explanations
 
+4. **`assertions.yaml`** - Deterministic assertions
+   - 5 test cases that together use every assertion type
+   - Topics: required and forbidden phrases, JSON and JSON Schema output, exact answers, regex-checked formats, latency and cost caps
+
 ## Configuration Files
 
 Configuration files define how evaluations are run, including which models to test, judge settings, and output options.
@@ -43,6 +47,10 @@ Configuration files define how evaluations are run, including which models to te
    - Compares Claude with local Ollama models
    - Useful for cost-effective testing and privacy-sensitive use cases
    - Requires Ollama running locally
+
+4. **`assertions_ci.yaml`** - Deterministic assertions as a CI gate
+   - Runs the assertions golden set with JUnit output
+   - Pair with `--fail-on-assertions` to fail the build without a judge threshold
 
 ## Quick Start
 

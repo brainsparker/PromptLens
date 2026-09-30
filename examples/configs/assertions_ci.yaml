@@ -1,0 +1,33 @@
+# CI-oriented configuration: deterministic assertions gate the build, the
+# judge score is exported alongside for review.
+#
+#   promptlens run examples/configs/assertions_ci.yaml --fail-on-assertions
+#   promptlens run examples/configs/assertions_ci.yaml --fail-under 3.5   # also fails on assertions
+#
+golden_set: ./examples/golden_sets/assertions.yaml
+
+models:
+  - name: "Claude Sonnet"
+    provider: anthropic
+    model: claude-3-5-sonnet-20241022
+    temperature: 0.2
+    max_tokens: 512
+
+judge:
+  provider: anthropic
+  model: claude-3-5-sonnet-20241022
+  temperature: 0.3
+
+execution:
+  parallel_requests: 3
+  retry_attempts: 2
+  timeout_seconds: 60
+  # Default is false: a response that already failed a hard check is marked
+  # failed without a paid judge call. Set true to still collect a judge score
+  # for every response.
+  judge_on_assertion_failure: false
+
+output:
+  directory: ./promptlens_results
+  formats: [json, junit, html, md]
+  run_name: "Assertions CI"

@@ -340,6 +340,26 @@ models:
 - Unclear expectations
 - Judge can't evaluate objectively
 
+**Even better: pin down the parts that have one right answer**
+```yaml
+- id: "support-001"
+  query: "I haven't received my order confirmation email"
+  expected_behavior: "Ask for order number, check spam folder, offer to resend, provide support email"
+  category: "order_issues"
+  assertions:
+    - type: contains
+      value: ["order number", "spam"]
+      ignore_case: true
+    - type: regex
+      name: "includes a support email"
+      value: "[a-z0-9._-]+@[a-z0-9.-]+"
+      ignore_case: true
+    - type: not_contains
+      value: "As an AI"
+```
+
+Assertions run before the judge, cost nothing, and give the same verdict every time. Leave the judge to the part that needs judgment (was the tone right, was the ordering sensible) and let assertions guard the facts. See the README's Deterministic Assertions section for the full list of types.
+
 ### How Many Test Cases?
 
 - **Start small**: 3-5 test cases
@@ -482,7 +502,10 @@ jobs:
       - name: Run Evaluation
         env:
           ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
-        run: python3 -m promptlens run tests/prompts.yaml
+        # Fails the job (exit code 2) if any test case fails one of its
+        # deterministic assertions. Add --fail-under 3.5 to also gate on the
+        # average judge score.
+        run: python3 -m promptlens run tests/prompts.yaml --fail-on-assertions
       - name: Upload Report
         uses: actions/upload-artifact@v2
         with:

@@ -21,6 +21,9 @@ REASON_NO_BASELINE_SCORE = "no_baseline_score"
 REASON_NO_SCORES = "no_scores"
 REASON_BOTH_ERRORED = "both_errored"
 REASON_WITHIN_THRESHOLD = "within_threshold"
+REASON_ASSERTIONS_NEWLY_FAILING = "assertions_newly_failing"
+REASON_ASSERTIONS_FIXED = "assertions_fixed"
+REASON_ASSERTIONS_STILL_FAILING = "assertions_still_failing"
 
 
 class CaseComparison(BaseModel):
@@ -39,6 +42,10 @@ class CaseComparison(BaseModel):
         candidate_latency_ms: Latency of the candidate response
         baseline_error: Error message from the baseline run, if any
         candidate_error: Error message from the candidate run, if any
+        baseline_assertions_passed: Whether all baseline assertions passed
+            (None when the baseline case declared no assertions)
+        candidate_assertions_passed: Whether all candidate assertions passed
+            (None when the candidate case declared no assertions)
         status: One of regressed / improved / unchanged / incomparable
         reason: Machine-readable reason for the status
     """
@@ -55,6 +62,8 @@ class CaseComparison(BaseModel):
     candidate_latency_ms: Optional[float] = None
     baseline_error: Optional[str] = None
     candidate_error: Optional[str] = None
+    baseline_assertions_passed: Optional[bool] = None
+    candidate_assertions_passed: Optional[bool] = None
     status: str
     reason: str
 

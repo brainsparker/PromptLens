@@ -5,6 +5,7 @@ from typing import Any, Dict, List, Optional
 
 from pydantic import BaseModel, Field
 
+from promptlens.models.assertions import AssertionResult, AssertionSummary
 from promptlens.models.tools import ToolCall, ToolCallEvaluation
 
 
@@ -94,6 +95,10 @@ class EvaluationResult(BaseModel):
         expected_behavior: What was expected
         model_response: The model's response with metadata
         judge_score: Score from the judge (if judging was performed)
+        assertion_results: Outcome of each deterministic assertion, in
+            declaration order (empty when the test case declares none)
+        judge_skipped_reason: Why the judge did not run, if it was skipped
+            on purpose (for example after an assertion failure)
         timestamp: When the evaluation was performed
     """
 
@@ -102,7 +107,26 @@ class EvaluationResult(BaseModel):
     expected_behavior: str
     model_response: ModelResponse
     judge_score: Optional[JudgeScore] = None
+    assertion_results: List[AssertionResult] = Field(default_factory=list)
+    judge_skipped_reason: Optional[str] = None
     timestamp: datetime = Field(default_factory=datetime.utcnow)
+
+    @property
+    def has_assertions(self) -> bool:
+        """Whether the test case declared any assertions."""
+        return bool(self.assertion_results)
+
+    @property
+    def assertions_passed(self) -> Optional[bool]:
+        """True if every assertion passed, False if any failed, None if none declared."""
+        if not self.assertion_results:
+            return None
+        return all(r.passed for r in self.assertion_results)
+
+    @property
+    def failed_assertions(self) -> List[AssertionResult]:
+        """Assertions that did not pass."""
+        return [r for r in self.assertion_results if not r.passed]
 
 
 class RunResult(BaseModel):
@@ -177,3 +201,44 @@ class RunResult(BaseModel):
             filtered_results = [r for r in self.results if r.model_response.model == model]
 
         return sum(r.model_response.latency_ms for r in filtered_results)
+
+    def get_assertion_summary(self, model: Optional[str] = None) -> AssertionSummary:
+        """Aggregate assertion outcomes for a specific model or all models.
+
+        Args:
+            model: Optional model name to filter by
+
+        Returns:
+            AssertionSummary with case-level and assertion-level counts
+        """
+        filtered_results = self.results
+        if model:
+            filtered_results = [r for r in self.results if r.model_response.model == model]
+
+        summary = AssertionSummary()
+        for r in filtered_results:
+            if not r.assertion_results:
+                continue
+            summary.cases_with_assertions += 1
+            summary.assertions_total += len(r.assertion_results)
+            failed = len(r.failed_assertions)
+            summary.assertions_failed += failed
+            if failed:
+                summary.cases_failed += 1
+            else:
+                summary.cases_passed += 1
+        return summary
+
+    def get_assertion_failures(self, model: Optional[str] = None) -> List[EvaluationResult]:
+        """Evaluations with at least one failed assertion.
+
+        Args:
+            model: Optional model name to filter by
+
+        Returns:
+            Evaluation results that failed at least one assertion
+        """
+        filtered_results = self.results
+        if model:
+            filtered_results = [r for r in self.results if r.model_response.model == model]
+        return [r for r in filtered_results if r.assertions_passed is False]
