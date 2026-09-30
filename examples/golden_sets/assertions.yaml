@@ -1,0 +1,92 @@
+name: "Deterministic Assertions"
+description: >
+  Shows every assertion type PromptLens supports. Assertions are cheap,
+  deterministic checks that run on the response before the LLM judge. A
+  response that fails one is marked failed without spending a judge call.
+version: "1.0"
+
+test_cases:
+  - id: "assert-001"
+    query: "What's your refund policy?"
+    expected_behavior: "Explain the 30-day refund policy clearly and directly"
+    category: "policy"
+    tags: ["refund", "assertions"]
+    assertions:
+      # Required text. A list means every item must be present.
+      - type: contains
+        value: ["30 days", "refund"]
+        ignore_case: true
+      # Forbidden text. A list means none of the items may appear.
+      - type: not_contains
+        value: ["As an AI", "I cannot", "I'm just a language model"]
+        ignore_case: true
+        message: "Support answers must not include AI disclaimers"
+      # Keep the answer short enough for a chat widget.
+      - type: max_chars
+        value: 1200
+
+  - id: "assert-002"
+    query: "Give me the order status for order 48213 as JSON with fields order_id, status, and eta_days."
+    expected_behavior: "Return a JSON object with the requested fields and no prose"
+    category: "structured_output"
+    tags: ["json", "assertions"]
+    assertions:
+      # Whole response (or a single fenced ```json block) must parse as JSON.
+      - type: is_json
+      # And it must satisfy this JSON Schema.
+      - type: json_schema
+        name: "order status schema"
+        value:
+          type: object
+          required: [order_id, status, eta_days]
+          properties:
+            order_id:
+              type: string
+            status:
+              type: string
+              enum: [processing, shipped, delivered, cancelled]
+            eta_days:
+              type: integer
+              minimum: 0
+          additionalProperties: false
+
+  - id: "assert-003"
+    query: "Reply with exactly one word: which planet is closest to the Sun?"
+    expected_behavior: "Answer with the single word Mercury"
+    category: "exact"
+    tags: ["assertions"]
+    assertions:
+      - type: equals
+        value: "Mercury"
+        ignore_case: true
+
+  - id: "assert-004"
+    query: "Write a one-line commit message for a change that fixes a null pointer in the login handler."
+    expected_behavior: "A conventional commit message on a single line"
+    category: "format"
+    tags: ["assertions", "regex"]
+    assertions:
+      - type: regex
+        name: "conventional commit prefix"
+        value: '^(fix|feat|chore|refactor|docs|test)(\([a-z0-9-]+\))?: '
+      - type: not_regex
+        name: "single line"
+        value: "\n."
+      - type: max_chars
+        value: 72
+
+  - id: "assert-005"
+    query: "Summarize the plot of Romeo and Juliet in two sentences."
+    expected_behavior: "Two-sentence summary that mentions the two families"
+    category: "summary"
+    tags: ["assertions", "latency"]
+    assertions:
+      - type: contains_any
+        value: ["Montague", "Capulet"]
+      - type: min_chars
+        value: 40
+      # Operational guardrails: latency and cost per response.
+      - type: max_latency_ms
+        value: 8000
+      - type: max_cost_usd
+        value: 0.02

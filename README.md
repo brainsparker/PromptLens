@@ -17,11 +17,12 @@ PromptLens runs golden test sets against multiple models, scores outputs using L
 
 - **Multi-Provider Support** - Test Anthropic (Claude), OpenAI (GPT), Google (Gemini), You.com, and local models (Ollama, LM Studio)
 - **Tool/Function Calling Evaluation** - Test tool usage with automatic + LLM judge scoring across 5 criteria
+- **Deterministic Assertions** - Cheap, repeatable checks (`contains`, `regex`, `is_json`, `json_schema`, `max_chars`, latency and cost caps) that run before the judge and can fail the build on their own
 - **LLM-as-Judge Scoring** - Automated evaluation using another LLM with configurable criteria
 - **Cost & Latency Tracking** - Monitor per-query costs and response times across models
 - **Beautiful Reports** - Interactive HTML reports with charts, comparisons, and detailed results
 - **Multiple Export Formats** - HTML, JSON, CSV, Markdown, and JUnit XML outputs
-- **CI-Native Quality Gates** - JUnit XML reports plus a `--fail-under` score gate that fails the build on quality regressions
+- **CI-Native Quality Gates** - JUnit XML reports plus `--fail-under` and `--fail-on-assertions` gates that fail the build on quality regressions
 - **Cross-Run Comparison** - Diff any two runs by test case and model with score, cost, and latency deltas, plus a `--fail-on-regression` CI gate
 - **Parallel Execution** - Async execution with configurable concurrency and retry logic
 - **Portable & Local** - No cloud backend, all data stays on your machine
@@ -304,6 +305,7 @@ execution:
   parallel_requests: 3              # Concurrent API calls
   retry_attempts: 3                 # Retries for failed requests
   timeout_seconds: 60               # Request timeout
+  judge_on_assertion_failure: false # Still call the judge when an assertion fails (default: skip it)
 ```
 
 ### Output
@@ -322,25 +324,90 @@ output:
 
 ---
 
+## Deterministic Assertions
+
+A judge is the right tool for "was this helpful?" It is the wrong tool for "does this parse as JSON?" or "did it mention the 30-day window?" Those questions have one correct answer, and paying a model to answer them adds cost and variance to a check a parser does for free.
+
+Assertions are declared per test case and run on the response before the judge:
+
+```yaml
+test_cases:
+  - id: "refund-001"
+    query: "What's your refund policy?"
+    expected_behavior: "Explain the 30-day refund policy clearly"
+    assertions:
+      - type: contains
+        value: ["30 days", "refund"]
+        ignore_case: true
+      - type: not_contains
+        value: ["As an AI", "I cannot"]
+        message: "Support answers must not include AI disclaimers"
+      - type: max_chars
+        value: 1200
+
+  - id: "order-json"
+    query: "Return the status of order 48213 as JSON with order_id, status, eta_days."
+    expected_behavior: "A JSON object with the requested fields"
+    assertions:
+      - type: is_json
+      - type: json_schema
+        value:
+          type: object
+          required: [order_id, status, eta_days]
+          properties:
+            eta_days: { type: integer, minimum: 0 }
+```
+
+| Type | Value | Passes when |
+|------|-------|-------------|
+| `equals` | string | the trimmed response equals the value |
+| `contains` | string or list | every listed string appears in the response |
+| `not_contains` | string or list | none of the listed strings appear |
+| `contains_any` | list | at least one listed string appears |
+| `starts_with`, `ends_with` | string | the response starts or ends with the value |
+| `regex`, `not_regex` | pattern | the pattern does or does not match (Python `re.search`) |
+| `is_json` | none | the response (or a single fenced ```` ```json ```` block) parses as JSON |
+| `json_schema` | JSON Schema mapping | the parsed JSON validates against the schema |
+| `max_chars`, `min_chars` | number | the response length is within the bound |
+| `max_latency_ms` | number | the response arrived within the bound |
+| `max_cost_usd` | number | the response cost at most this much (fails if cost is unknown) |
+
+Every text assertion accepts `ignore_case: true`. Add `name` to control the label shown in reports and `message` to replace the default failure explanation. Invalid regexes and malformed values are rejected by `promptlens validate` before anything runs.
+
+What happens when an assertion fails:
+
+- The case is marked failed in every export. In JUnit it is a `<failure type="AssertionFailed">`, even if the judge would have scored it 5/5.
+- The judge is skipped for that case by default, so a response that already failed a hard check does not cost a judge call. Set `execution.judge_on_assertion_failure: true` to score every response anyway.
+- `promptlens compare` treats assertions that newly fail as a regression and assertions that start passing as an improvement, ahead of any score delta.
+
+A full example lives in [`examples/golden_sets/assertions.yaml`](examples/golden_sets/assertions.yaml).
+
+---
+
 ## CI/CD Integration
 
 PromptLens speaks the language your CI system already understands: JUnit XML test reports and exit codes.
 
-Add `junit` to your output formats, then gate the build on judge scores:
+Add `junit` to your output formats, then gate the build:
 
 ```bash
-promptlens run config.yaml --fail-under 3.5
+promptlens run config.yaml --fail-on-assertions   # deterministic gate only
+promptlens run config.yaml --fail-under 3.5       # judge threshold, and assertions
 ```
 
 - Each golden-set test case becomes a JUnit test case (one test suite per model).
-- A test case scoring below the threshold is reported as a failure, a model API error as an error, and an unjudged case as skipped.
-- If any model's average judge score falls below `--fail-under`, the command exits with code 2, failing the pipeline. Exit code 1 is reserved for run errors, so CI can tell quality regressions apart from infrastructure failures.
+- A test case that fails an assertion or scores below the threshold is reported as a failure, a model API error as an error, and an unjudged case with no assertions as skipped.
+- `--fail-on-assertions` exits with code 2 if any test case fails one of its deterministic assertions. It never calls a model to decide, so it is safe on every commit.
+- `--fail-under` exits with code 2 if any model's average judge score falls below the threshold, or if any assertion failed. A hard check can never be masked by a healthy average.
+- Exit code 1 is reserved for run errors, so CI can tell quality regressions apart from infrastructure failures.
+
+A common layout is to gate every pull request on assertions and run the judge threshold nightly, since judge scores carry sampling variance that a blocking gate should not.
 
 Example GitHub Actions step:
 
 ```yaml
 - name: Run prompt evals
-  run: promptlens run config.yaml --fail-under 3.5
+  run: promptlens run config.yaml --fail-on-assertions --fail-under 3.5
 
 - name: Publish eval report
   uses: mikepenz/action-junit-report@v5
@@ -369,7 +436,7 @@ promptlens compare <baseline_run_id> latest
 
 Results are paired by test case and model, then classified:
 
-- **Regressed** - the judge score dropped by at least the threshold (default 1 point on the 1-5 scale), the case newly errored, or the case lost its judge score
+- **Regressed** - the judge score dropped by at least the threshold (default 1 point on the 1-5 scale), the case newly errored, the case's assertions newly failed, or the case lost its judge score
 - **Improved** - the score rose by at least the threshold, or a baseline error was resolved
 - **Unchanged** - the delta stayed within the threshold
 - **Incomparable** - the baseline case had no judge score
@@ -657,6 +724,7 @@ class RuleBasedJudge(BaseJudge):
 - [x] JUnit XML export and `--fail-under` CI quality gate
 - [x] Parallel execution with retry logic
 - [x] Cross-run comparison with `--fail-on-regression` CI gate
+- [x] Deterministic assertions with `--fail-on-assertions` CI gate
 - [ ] Multi-judge consensus scoring
 - [ ] Synthetic test case generation
 - [ ] Historical trend tracking across many runs

@@ -7,10 +7,15 @@ evaluated golden-set entry.
 
 Mapping rules:
     - A test case whose model response errored is reported as an <error>.
+    - A test case that failed one or more deterministic assertions is
+      reported as a <failure> (type AssertionFailed), whether or not it
+      was judged.
     - A test case whose judge score is below the failure threshold is
       reported as a <failure>.
     - A test case that was never judged (judging disabled or judge failed)
-      is reported as <skipped>, so CI does not report a false pass.
+      and has no assertions to stand on is reported as <skipped>, so CI does
+      not report a false pass. A case whose assertions all passed but whose
+      judge was never run counts as a pass on the strength of its assertions.
     - Everything else is a pass.
 """
 
@@ -126,6 +131,7 @@ class JUnitXMLExporter(BaseExporter):
 
             response_error = eval_result.model_response.error
             judge_score = eval_result.judge_score
+            failed_assertions = eval_result.failed_assertions
 
             if response_error:
                 errors += 1
@@ -133,6 +139,32 @@ class JUnitXMLExporter(BaseExporter):
                 error_el.set("message", _truncate(response_error, 300))
                 error_el.set("type", "ModelResponseError")
                 error_el.text = response_error
+            elif failed_assertions:
+                failures += 1
+                names = ", ".join(a.name for a in failed_assertions)
+                failure_el = ET.SubElement(testcase, "failure")
+                failure_el.set(
+                    "message",
+                    _truncate(
+                        f"{len(failed_assertions)} assertion(s) failed: {names}", 300
+                    ),
+                )
+                failure_el.set("type", "AssertionFailed")
+                detail_lines = [
+                    f"Query: {_truncate(eval_result.query, 500)}",
+                    f"Expected: {_truncate(eval_result.expected_behavior, 500)}",
+                ]
+                for assertion in failed_assertions:
+                    detail_lines.append(
+                        f"FAILED {assertion.name}: {_truncate(assertion.message, 500)}"
+                    )
+                if judge_score is not None:
+                    detail_lines.append(f"Judge score: {judge_score.score}")
+                failure_el.text = "\n".join(detail_lines)
+            elif judge_score is None and eval_result.has_assertions:
+                # Assertions all passed and the judge was skipped or
+                # disabled: the case stands on its deterministic checks.
+                pass
             elif judge_score is None:
                 skipped += 1
                 skipped_el = ET.SubElement(testcase, "skipped")
@@ -168,6 +200,14 @@ class JUnitXMLExporter(BaseExporter):
                 out_lines.append(
                     f"judge_explanation: {_truncate(judge_score.explanation, 500)}"
                 )
+            elif eval_result.judge_skipped_reason:
+                out_lines.append(f"judge: {eval_result.judge_skipped_reason}")
+            for assertion in eval_result.assertion_results:
+                verdict = "PASS" if assertion.passed else "FAIL"
+                out_lines.append(
+                    f"assertion {verdict} {assertion.name}: "
+                    f"{_truncate(assertion.message, 300)}"
+                )
             system_out.text = "\n".join(out_lines)
 
         suite.set("tests", str(len(model_results)))
@@ -185,6 +225,18 @@ class JUnitXMLExporter(BaseExporter):
         avg_score = result.get_average_score(model)
         if avg_score is not None:
             _add_property(properties, "average_judge_score", f"{avg_score:.2f}")
+        assertion_summary = result.get_assertion_summary(model)
+        if assertion_summary.cases_with_assertions:
+            _add_property(
+                properties,
+                "assertions_passed_cases",
+                f"{assertion_summary.cases_passed}/{assertion_summary.cases_with_assertions}",
+            )
+            _add_property(
+                properties,
+                "assertions_failed",
+                f"{assertion_summary.assertions_failed}/{assertion_summary.assertions_total}",
+            )
         _add_property(
             properties, "total_cost_usd", f"{result.get_total_cost(model):.6f}"
         )

@@ -74,6 +74,28 @@ def _check_fail_under(result: "RunResult", fail_under: float) -> list:
     return failing
 
 
+def _check_assertion_failures(result: "RunResult") -> list:
+    """Collect evaluations that failed at least one deterministic assertion.
+
+    Args:
+        result: The completed run result
+
+    Returns:
+        List of (test_case_id, model, [failed AssertionResult, ...]) tuples,
+        empty when every declared assertion passed.
+    """
+    failures = []
+    for eval_result in result.get_assertion_failures():
+        failures.append(
+            (
+                eval_result.test_case_id,
+                eval_result.model_response.model,
+                eval_result.failed_assertions,
+            )
+        )
+    return failures
+
+
 def setup_logging(level: str = "INFO") -> None:
     """Set up logging configuration.
 
@@ -126,8 +148,18 @@ def cli(log_level: str) -> None:
     default=None,
     help=(
         "Quality gate for CI: exit with code 2 if any model's average judge "
-        "score falls below this value (1-5 scale). Also sets the per-test "
+        "score falls below this value (1-5 scale), or if any test case fails "
+        "one of its deterministic assertions. Also sets the per-test "
         "failure threshold used by the junit export format."
+    ),
+)
+@click.option(
+    "--fail-on-assertions",
+    is_flag=True,
+    help=(
+        "Quality gate for CI: exit with code 2 if any test case fails one of "
+        "its deterministic assertions (contains, regex, is_json, ...). Use this "
+        "to gate on assertions alone, without a judge-score threshold."
     ),
 )
 def run(
@@ -136,6 +168,7 @@ def run(
     output_dir: Optional[str],
     dry_run: bool,
     fail_under: Optional[float],
+    fail_on_assertions: bool,
 ) -> None:
     """Run evaluation with the given configuration file.
 
@@ -146,6 +179,7 @@ def run(
         promptlens run config.yaml --output-dir ./results
         promptlens run config.yaml --dry-run
         promptlens run config.yaml --fail-under 3.5
+        promptlens run config.yaml --fail-on-assertions
     """
     try:
         # Load config
@@ -219,20 +253,48 @@ def run(
             html_path = run_output_dir / "report.html"
             console.print(f"\n[cyan]View report: file://{html_path.absolute()}[/cyan]")
 
-        # Quality gate for CI
-        if fail_under is not None:
-            failing_models = _check_fail_under(result, fail_under)
-            if failing_models:
-                console.print(
-                    f"\n[bold red]✗ Quality gate failed (--fail-under {fail_under:g}):[/bold red]"
-                )
-                for model, avg in failing_models:
-                    avg_display = f"{avg:.2f}" if avg is not None else "no scores"
-                    console.print(f"  {model}: average judge score {avg_display}")
-                sys.exit(2)
-            console.print(
-                f"\n[bold green]✓ Quality gate passed (--fail-under {fail_under:g})[/bold green]"
+        # Quality gate for CI. Either flag arms the gate; a failed assertion
+        # fails it under both, so a hard check can never be masked by a
+        # healthy judge average.
+        gate_armed = fail_under is not None or fail_on_assertions
+        if gate_armed:
+            gate_label = " ".join(
+                part
+                for part in [
+                    f"--fail-under {fail_under:g}" if fail_under is not None else "",
+                    "--fail-on-assertions" if fail_on_assertions else "",
+                ]
+                if part
             )
+            gate_failed = False
+
+            assertion_failures = _check_assertion_failures(result)
+            if assertion_failures:
+                gate_failed = True
+                console.print(
+                    f"\n[bold red]✗ Quality gate failed ({gate_label}): "
+                    f"{len(assertion_failures)} evaluation(s) failed assertions[/bold red]"
+                )
+                for test_case_id, model, failed in assertion_failures:
+                    for assertion in failed:
+                        console.print(
+                            f"  {test_case_id} [{model}] {assertion.name}: {assertion.message}"
+                        )
+
+            if fail_under is not None:
+                failing_models = _check_fail_under(result, fail_under)
+                if failing_models:
+                    gate_failed = True
+                    console.print(
+                        f"\n[bold red]✗ Quality gate failed (--fail-under {fail_under:g}):[/bold red]"
+                    )
+                    for model, avg in failing_models:
+                        avg_display = f"{avg:.2f}" if avg is not None else "no scores"
+                        console.print(f"  {model}: average judge score {avg_display}")
+
+            if gate_failed:
+                sys.exit(2)
+            console.print(f"\n[bold green]✓ Quality gate passed ({gate_label})[/bold green]")
 
     except Exception as e:
         console.print(f"\n[bold red]Error:[/bold red] {e}")
@@ -267,10 +329,18 @@ def validate(golden_set: str) -> None:
         if golden_set_obj.description:
             console.print(f"  Description: {golden_set_obj.description}")
 
+        assertion_count = sum(len(tc.assertions) for tc in golden_set_obj.test_cases)
+        cases_with_assertions = sum(1 for tc in golden_set_obj.test_cases if tc.assertions)
+        if assertion_count:
+            console.print(
+                f"  Assertions: {assertion_count} across {cases_with_assertions} test case(s)"
+            )
+
         # Show test case IDs
         console.print(f"\n  Test Case IDs:")
         for tc in golden_set_obj.test_cases:
-            console.print(f"    - {tc.id}")
+            suffix = f" ({len(tc.assertions)} assertions)" if tc.assertions else ""
+            console.print(f"    - {tc.id}{suffix}")
 
     except Exception as e:
         console.print(f"[red]Validation failed: {e}[/red]")

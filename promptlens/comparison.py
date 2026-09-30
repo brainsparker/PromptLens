@@ -10,6 +10,9 @@ import logging
 from typing import Dict, List, Optional, Tuple
 
 from promptlens.models.comparison import (
+    REASON_ASSERTIONS_FIXED,
+    REASON_ASSERTIONS_NEWLY_FAILING,
+    REASON_ASSERTIONS_STILL_FAILING,
     REASON_BOTH_ERRORED,
     REASON_ERROR_RESOLVED,
     REASON_NEW_ERROR,
@@ -59,13 +62,20 @@ def _classify(
     2. A case whose baseline error is resolved in the candidate run is an
        improvement.
     3. A case that errors in both runs is unchanged.
-    4. With scores on both sides, the score delta decides: a drop of at least
+    4. Deterministic assertions come next. A case whose assertions newly fail
+       in the candidate run is a regression, regardless of judge scores. A
+       case whose failing baseline assertions now pass is an improvement. A
+       case failing assertions in both runs is unchanged.
+    5. With scores on both sides, the score delta decides: a drop of at least
        ``threshold`` is a regression, a gain of at least ``threshold`` is an
        improvement, anything smaller is unchanged.
-    5. A case that was scored in the baseline but has no candidate score is a
+    6. A case that was scored in the baseline but has no candidate score is a
        regression: the gate cannot be evaluated without a score, and a silent
-       pass would be misleading.
-    6. A case with no baseline score cannot be compared.
+       pass would be misleading. The exception is a case whose assertions
+       passed on both sides and whose judge was deliberately skipped in the
+       candidate run; that case is unchanged.
+    7. A case with no baseline score cannot be compared, unless assertions
+       passed on both sides, in which case it is unchanged.
     """
     baseline_error = baseline.model_response.error
     candidate_error = candidate.model_response.error
@@ -76,6 +86,16 @@ def _classify(
         return STATUS_IMPROVED, REASON_ERROR_RESOLVED
     if baseline_error and candidate_error:
         return STATUS_UNCHANGED, REASON_BOTH_ERRORED
+
+    baseline_assertions = baseline.assertions_passed
+    candidate_assertions = candidate.assertions_passed
+
+    if candidate_assertions is False and baseline_assertions is not False:
+        return STATUS_REGRESSED, REASON_ASSERTIONS_NEWLY_FAILING
+    if baseline_assertions is False and candidate_assertions is True:
+        return STATUS_IMPROVED, REASON_ASSERTIONS_FIXED
+    if baseline_assertions is False and candidate_assertions is False:
+        return STATUS_UNCHANGED, REASON_ASSERTIONS_STILL_FAILING
 
     baseline_score = baseline.judge_score.score if baseline.judge_score else None
     candidate_score = candidate.judge_score.score if candidate.judge_score else None
@@ -88,10 +108,16 @@ def _classify(
             return STATUS_IMPROVED, REASON_SCORE_GAIN
         return STATUS_UNCHANGED, REASON_WITHIN_THRESHOLD
 
+    assertions_hold = baseline_assertions is True and candidate_assertions is True
+
     if baseline_score is not None and candidate_score is None:
+        if assertions_hold and candidate.judge_skipped_reason:
+            return STATUS_UNCHANGED, REASON_WITHIN_THRESHOLD
         return STATUS_REGRESSED, REASON_SCORE_MISSING
     if baseline_score is None and candidate_score is not None:
         return STATUS_INCOMPARABLE, REASON_NO_BASELINE_SCORE
+    if assertions_hold:
+        return STATUS_UNCHANGED, REASON_WITHIN_THRESHOLD
     return STATUS_INCOMPARABLE, REASON_NO_SCORES
 
 
@@ -122,6 +148,8 @@ def _build_case_comparison(
         candidate_latency_ms=candidate.model_response.latency_ms,
         baseline_error=baseline.model_response.error,
         candidate_error=candidate.model_response.error,
+        baseline_assertions_passed=baseline.assertions_passed,
+        candidate_assertions_passed=candidate.assertions_passed,
         status=status,
         reason=reason,
     )

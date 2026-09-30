@@ -108,12 +108,17 @@ class ExecutionConfig(BaseModel):
         retry_attempts: Maximum retry attempts for failed requests
         retry_delay_seconds: Initial delay between retries
         timeout_seconds: Request timeout
+        judge_on_assertion_failure: Whether to still call the LLM judge when a
+            test case fails one of its deterministic assertions. Off by
+            default: a response that already failed a hard check does not need
+            a paid judge call to be marked failed.
     """
 
     parallel_requests: int = 3
     retry_attempts: int = 3
     retry_delay_seconds: float = 1.0
     timeout_seconds: int = 60
+    judge_on_assertion_failure: bool = False
 
     @field_validator("parallel_requests")
     @classmethod
@@ -160,7 +165,7 @@ class OutputConfig(BaseModel):
     @field_validator("formats")
     @classmethod
     def validate_formats(cls, value: List[str]) -> List[str]:
-        allowed = {"html", "json", "csv", "md"}
+        allowed = {"html", "json", "csv", "md", "junit"}
         normalized = [fmt.lower() for fmt in value]
         invalid = sorted({fmt for fmt in normalized if fmt not in allowed})
         if invalid:

@@ -81,6 +81,13 @@ class MarkdownExporter(BaseExporter):
             lines.append("|--------|-------|")
             if avg_score is not None:
                 lines.append(f"| Average Score | {avg_score:.2f}/5.0 |")
+            assertions = result.get_assertion_summary(model)
+            if assertions.cases_with_assertions:
+                lines.append(
+                    f"| Assertions | {assertions.cases_passed}/{assertions.cases_with_assertions} "
+                    f"cases passed ({assertions.assertions_failed} of "
+                    f"{assertions.assertions_total} checks failed) |"
+                )
             lines.append(f"| Total Cost | ${total_cost:.4f} |")
             lines.append(f"| Total Time | {total_latency:.0f}ms |")
             lines.append("")
@@ -104,9 +111,15 @@ class MarkdownExporter(BaseExporter):
             lines.append(f"**Expected:** {evals[0].expected_behavior}")
             lines.append("")
 
+            has_assertions = any(e.has_assertions for e in evals)
+
             # Results table
-            lines.append("| Model | Score | Latency | Cost | Response |")
-            lines.append("|-------|-------|---------|------|----------|")
+            if has_assertions:
+                lines.append("| Model | Score | Assertions | Latency | Cost | Response |")
+                lines.append("|-------|-------|------------|---------|------|----------|")
+            else:
+                lines.append("| Model | Score | Latency | Cost | Response |")
+                lines.append("|-------|-------|---------|------|----------|")
 
             for eval_result in evals:
                 score = (
@@ -120,9 +133,36 @@ class MarkdownExporter(BaseExporter):
                 if eval_result.model_response.error:
                     response = f"ERROR: {eval_result.model_response.error}"
 
-                lines.append(
-                    f"| {eval_result.model_response.model} | {score} | {latency} | {cost} | {response}... |"
-                )
+                if has_assertions:
+                    if eval_result.assertions_passed is None:
+                        assertion_cell = "-"
+                    elif eval_result.assertions_passed:
+                        assertion_cell = f"PASS ({len(eval_result.assertion_results)})"
+                    else:
+                        assertion_cell = (
+                            f"FAIL ({len(eval_result.failed_assertions)}/"
+                            f"{len(eval_result.assertion_results)})"
+                        )
+                    lines.append(
+                        f"| {eval_result.model_response.model} | {score} | {assertion_cell} "
+                        f"| {latency} | {cost} | {response}... |"
+                    )
+                else:
+                    lines.append(
+                        f"| {eval_result.model_response.model} | {score} | {latency} | {cost} | {response}... |"
+                    )
+
+            # Spell out failed assertions under the table
+            failed_lines = []
+            for eval_result in evals:
+                for assertion in eval_result.failed_assertions:
+                    failed_lines.append(
+                        f"- **{eval_result.model_response.model}** failed `{assertion.name}`: "
+                        f"{assertion.message}"
+                    )
+            if failed_lines:
+                lines.append("")
+                lines.extend(failed_lines)
 
             lines.append("")
 
