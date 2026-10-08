@@ -39,12 +39,10 @@ class ModelResponse(BaseModel):
 
     # Tool calling fields (optional, for backward compatibility)
     tool_calls: List[ToolCall] = Field(
-        default_factory=list,
-        description="Tool calls made by the model in this response"
+        default_factory=list, description="Tool calls made by the model in this response"
     )
     stop_reason: Optional[str] = Field(
-        None,
-        description="Reason the model stopped (e.g., 'end_turn', 'tool_use', 'max_tokens')"
+        None, description="Reason the model stopped (e.g., 'end_turn', 'tool_use', 'max_tokens')"
     )
 
 
@@ -61,6 +59,11 @@ class JudgeScore(BaseModel):
         tool_evaluations: Detailed evaluation of each tool call (if applicable)
         tool_usage_score: Overall score for tool usage correctness (1-5)
         tool_efficiency_score: Score for tool usage efficiency (1-5)
+        runs: Number of independent judge calls that produced this score
+        samples: Every individual score the judge returned, in call order.
+            Empty for single-run scores stored by older versions.
+        agreement: Fraction of samples that equal the final score (1.0 means
+            every judge call agreed). None when only one run was made.
     """
 
     score: int = Field(..., ge=1, le=5)  # Must be 1-5
@@ -70,10 +73,38 @@ class JudgeScore(BaseModel):
     judge_provider: str
     timestamp: datetime = Field(default_factory=datetime.utcnow)
 
+    # Judge stability fields (optional, for backward compatibility)
+    runs: int = Field(
+        1,
+        ge=1,
+        description="Number of independent judge calls aggregated into this score",
+    )
+    samples: List[int] = Field(
+        default_factory=list,
+        description="Individual judge scores from each run, in call order",
+    )
+    agreement: Optional[float] = Field(
+        None,
+        ge=0.0,
+        le=1.0,
+        description="Fraction of judge runs that agreed with the final score",
+    )
+
+    @property
+    def is_unanimous(self) -> bool:
+        """True when every judge run returned the same score.
+
+        Single-run scores are unanimous by definition: there is nothing to
+        disagree with. Flip-rate statistics therefore only count cases that
+        were judged more than once.
+        """
+        if len(self.samples) <= 1:
+            return True
+        return len(set(self.samples)) == 1
+
     # Tool evaluation fields (optional, for backward compatibility)
     tool_evaluations: List[ToolCallEvaluation] = Field(
-        default_factory=list,
-        description="Detailed evaluation results for each tool call"
+        default_factory=list, description="Detailed evaluation results for each tool call"
     )
     tool_usage_score: Optional[float] = Field(
         None,
@@ -145,6 +176,62 @@ class RunResult(BaseModel):
 
         scores = [r.judge_score.score for r in filtered_results if r.judge_score]
         return sum(scores) / len(scores) if scores else None
+
+    def get_judge_runs(self) -> int:
+        """Return the number of judge runs used for this result set.
+
+        Takes the maximum across scored results, so a run that mixed
+        single-run and multi-run scores still reports the multi-run setting.
+        Returns 1 when nothing was judged.
+        """
+        runs = [r.judge_score.runs for r in self.results if r.judge_score]
+        return max(runs) if runs else 1
+
+    def get_unstable_case_ids(self, model: Optional[str] = None) -> List[str]:
+        """Return test case ids whose judge runs disagreed with each other.
+
+        Only cases judged more than once can be unstable. Results are in
+        run order and deduplicated.
+
+        Args:
+            model: Optional model name to filter by
+        """
+        filtered_results = self.results
+        if model:
+            filtered_results = [r for r in self.results if r.model_response.model == model]
+
+        seen: List[str] = []
+        for r in filtered_results:
+            if r.judge_score and not r.judge_score.is_unanimous:
+                if r.test_case_id not in seen:
+                    seen.append(r.test_case_id)
+        return seen
+
+    def get_flip_rate(self, model: Optional[str] = None) -> Optional[float]:
+        """Return the share of multi-run judged cases whose runs disagreed.
+
+        A flip rate of 0.0 means every multi-run case was judged unanimously;
+        0.25 means one in four cases got at least two different scores
+        across judge runs. Returns None when no case was judged more than
+        once, since stability cannot be measured from a single roll.
+
+        Args:
+            model: Optional model name to filter by
+        """
+        filtered_results = self.results
+        if model:
+            filtered_results = [r for r in self.results if r.model_response.model == model]
+
+        multi_run = [
+            r.judge_score
+            for r in filtered_results
+            if r.judge_score and len(r.judge_score.samples) > 1
+        ]
+        if not multi_run:
+            return None
+
+        flipped = sum(1 for score in multi_run if not score.is_unanimous)
+        return flipped / len(multi_run)
 
     def get_total_cost(self, model: Optional[str] = None) -> float:
         """Calculate total cost for a specific model or all models.

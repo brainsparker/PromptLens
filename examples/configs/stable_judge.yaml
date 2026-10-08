@@ -1,0 +1,43 @@
+# Stable Judge Configuration
+# Samples the judge several times per response so judge non-determinism
+# shows up as a measured flip rate instead of a flaky CI check.
+#
+# Run it as a CI gate:
+#   promptlens run examples/configs/stable_judge.yaml --fail-under 3.5 --max-flip-rate 0.2
+#
+# Cost note: every extra judge run is one extra judge call per response.
+# With 5 runs, judging costs 5x a single-run config. Keep the judge model
+# cheap or the golden set small when sampling heavily.
+
+golden_set: ./examples/golden_sets/customer_support.yaml
+
+models:
+  - name: "Claude 3.5 Sonnet"
+    provider: anthropic
+    model: claude-3-5-sonnet-20241022
+    temperature: 0.7
+    max_tokens: 512
+
+judge:
+  provider: anthropic
+  model: claude-3-5-sonnet-20241022
+  temperature: 0.0
+  # Independent judge calls per response. Odd numbers avoid ties.
+  runs: 5
+  # median: robust to one outlier run (default)
+  # mean:   rounded average, smoother across runs
+  # min:    strictest reading, useful for safety-critical gates
+  aggregation: median
+
+execution:
+  parallel_requests: 3
+  retry_attempts: 2
+  timeout_seconds: 60
+
+output:
+  directory: ./promptlens_results
+  formats:
+    - html
+    - json
+    - junit
+  run_name: "Stable Judge"

@@ -23,6 +23,7 @@ PromptLens runs golden test sets against multiple models, scores outputs using L
 - **Multiple Export Formats** - HTML, JSON, CSV, Markdown, and JUnit XML outputs
 - **CI-Native Quality Gates** - JUnit XML reports plus a `--fail-under` score gate that fails the build on quality regressions
 - **Cross-Run Comparison** - Diff any two runs by test case and model with score, cost, and latency deltas, plus a `--fail-on-regression` CI gate
+- **Judge Stability Sampling** - Call the judge N times per response, aggregate the scores, and report the per-case agreement and per-model flip rate, with a `--max-flip-rate` gate so a noisy judge fails loudly instead of flaking
 - **Parallel Execution** - Async execution with configurable concurrency and retry logic
 - **Portable & Local** - No cloud backend, all data stays on your machine
 - **Easy to Extend** - Plugin architecture for custom providers, judges, and exporters
@@ -162,6 +163,9 @@ promptlens run my_config.yaml
 # Run evaluation
 promptlens run <config.yaml>
 
+# Run with a 5-sample judge and fail CI if the judge flips on more than 20% of cases
+promptlens run <config.yaml> --judge-runs 5 --max-flip-rate 0.2
+
 # Validate a golden set
 promptlens validate <golden_set.yaml>
 
@@ -295,7 +299,23 @@ judge:
     - accuracy
     - helpfulness
     - safety
+  runs: 1                           # Judge calls per response (1-25). See "Judge stability" below
+  aggregation: median               # How sampled scores collapse: median, mean, or min
 ```
+
+#### Judge stability
+
+LLM judges are not deterministic. The same response, judged twice by the same model at the same temperature, can land on different scores, and on close calls it happens often. A gate built on one judge call inherits that noise as a flaky CI check.
+
+Set `judge.runs` above 1 (or pass `--judge-runs N`) and PromptLens calls the judge that many times per response, concurrently, and aggregates the scores:
+
+- `median` (default) picks the middle sample, so one outlier run cannot move the score. Use an odd run count to avoid ties.
+- `mean` rounds the average to the nearest integer.
+- `min` takes the lowest sample, the strictest reading, useful for safety-critical gates.
+
+Every judged result then carries `samples` (each run's score), `runs`, and `agreement` (the share of runs that matched the final score). Reports show the individual run scores next to the final one, and each model gets a flip rate: the share of cases whose runs disagreed. Results from older single-run runs still load and compare normally.
+
+Cost note: judge cost scales linearly with `runs`. Five runs means five judge calls per response. Pair a higher run count with a cheaper judge model or a smaller golden set.
 
 ### Execution
 
@@ -336,11 +356,21 @@ promptlens run config.yaml --fail-under 3.5
 - A test case scoring below the threshold is reported as a failure, a model API error as an error, and an unjudged case as skipped.
 - If any model's average judge score falls below `--fail-under`, the command exits with code 2, failing the pipeline. Exit code 1 is reserved for run errors, so CI can tell quality regressions apart from infrastructure failures.
 
+A gate is only as trustworthy as the judge behind it. Add a stability gate so judge noise fails the build explicitly instead of showing up as a check you re-run until it passes:
+
+```bash
+promptlens run config.yaml --judge-runs 5 --fail-under 3.5 --max-flip-rate 0.2
+```
+
+- `--judge-runs 5` scores every response five times and takes the median (see [Judge stability](#judge-stability)).
+- `--max-flip-rate 0.2` exits with code 2 if more than 20 percent of a model's cases got different scores across judge runs. A model with no multi-run scores also fails the gate, since stability cannot be measured from a single roll.
+- The JUnit report records `judge_runs` and `judge_flip_rate` as suite properties and each case's samples in its output, so the evidence travels with the test report.
+
 Example GitHub Actions step:
 
 ```yaml
 - name: Run prompt evals
-  run: promptlens run config.yaml --fail-under 3.5
+  run: promptlens run config.yaml --judge-runs 5 --fail-under 3.5 --max-flip-rate 0.2
 
 - name: Publish eval report
   uses: mikepenz/action-junit-report@v5
@@ -657,7 +687,8 @@ class RuleBasedJudge(BaseJudge):
 - [x] JUnit XML export and `--fail-under` CI quality gate
 - [x] Parallel execution with retry logic
 - [x] Cross-run comparison with `--fail-on-regression` CI gate
-- [ ] Multi-judge consensus scoring
+- [x] Multi-run judge sampling with flip-rate reporting and `--max-flip-rate` CI gate
+- [ ] Multi-judge consensus scoring (different judge models voting)
 - [ ] Synthetic test case generation
 - [ ] Historical trend tracking across many runs
 - [ ] GitHub Action for CI/CD

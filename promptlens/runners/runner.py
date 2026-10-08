@@ -56,9 +56,6 @@ class Runner:
                 logger.info(f"Initialized provider for {model_config.name}")
             except Exception as e:
                 logger.error(f"Failed to initialize provider for {model_config.name}: {e}")
-                console.print(
-                    f"[red]Warning: Skipping {model_config.name} - {e}[/red]"
-                )
 
         if not self.providers:
             raise ValueError("No providers successfully initialized")
@@ -252,6 +249,13 @@ class Runner:
             console.print(f"[bold]{model}[/bold]")
             if avg_score is not None:
                 console.print(f"  Average Score: {avg_score:.2f}/5.0")
+            flip_rate = result.get_flip_rate(model)
+            if flip_rate is not None:
+                unstable = len(result.get_unstable_case_ids(model))
+                console.print(
+                    f"  Judge Stability: {1 - flip_rate:.0%} of cases unanimous "
+                    f"over {result.get_judge_runs()} runs ({unstable} unstable)"
+                )
             console.print(f"  Total Cost: ${total_cost:.4f}")
             console.print(f"  Total Time: {total_latency:.0f}ms")
             console.print()

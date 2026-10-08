@@ -1,10 +1,12 @@
 """LLM-as-judge implementation."""
 
+import asyncio
 import logging
 from datetime import datetime
 from typing import List
 
 from promptlens.judges.base import BaseJudge
+from promptlens.judges.stability import aggregate_judge_scores
 from promptlens.judges.parser import (
     evaluate_tool_call_accuracy,
     parse_judge_response,
@@ -54,14 +56,38 @@ class LLMJudge(BaseJudge):
     ) -> JudgeScore:
         """Evaluate a model response using LLM-as-judge.
 
-        Routes to tool evaluation if test case has tool evaluation enabled.
+        When ``config.runs`` is greater than 1, the judge is called that many
+        times concurrently and the sampled scores are aggregated (see
+        ``promptlens.judges.stability``). The returned JudgeScore then carries
+        every sample and the agreement between them, so a close call that
+        flips between runs is reported as such instead of landing on
+        whichever score the single roll produced.
 
         Args:
             test_case: The test case with expected behavior
             model_response: The model's response to evaluate
 
         Returns:
-            JudgeScore with score (1-5) and explanation
+            JudgeScore with score (1-5), explanation, and stability metadata
+        """
+        runs = max(1, self.config.runs)
+        if runs == 1:
+            single = await self._evaluate_once(test_case, model_response)
+            return aggregate_judge_scores([single], self.config.aggregation)
+
+        samples = await asyncio.gather(
+            *(self._evaluate_once(test_case, model_response) for _ in range(runs))
+        )
+        return aggregate_judge_scores(list(samples), self.config.aggregation)
+
+    async def _evaluate_once(
+        self,
+        test_case: TestCase,
+        model_response: ModelResponse,
+    ) -> JudgeScore:
+        """Run the judge exactly once.
+
+        Routes to tool evaluation if test case has tool evaluation enabled.
         """
         # Check if this is a tool evaluation
         if test_case.evaluation_mode in ["tool_only", "tool_and_answer"]:
@@ -179,12 +205,10 @@ class LLMJudge(BaseJudge):
             # Prepare data for prompt formatting
             tools_data = [tool.to_anthropic_format() for tool in test_case.tools]
             expected_calls_data = [
-                {"name": ec.name, "arguments": ec.arguments}
-                for ec in test_case.expected_tool_calls
+                {"name": ec.name, "arguments": ec.arguments} for ec in test_case.expected_tool_calls
             ]
             actual_calls_data = [
-                {"name": tc.name, "arguments": tc.arguments}
-                for tc in model_response.tool_calls
+                {"name": tc.name, "arguments": tc.arguments} for tc in model_response.tool_calls
             ]
             auto_eval_data = [
                 {

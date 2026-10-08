@@ -60,10 +60,17 @@ class CSVExporter(BaseExporter):
                 "provider": eval_result.model_response.provider,
                 "response": eval_result.model_response.content[:200],  # Truncate
                 "score": eval_result.judge_score.score if eval_result.judge_score else None,
-                "explanation": (
-                    eval_result.judge_score.explanation[:200]
+                "judge_runs": eval_result.judge_score.runs if eval_result.judge_score else None,
+                "score_samples": (
+                    " ".join(str(s) for s in eval_result.judge_score.samples)
                     if eval_result.judge_score
                     else ""
+                ),
+                "judge_agreement": (
+                    eval_result.judge_score.agreement if eval_result.judge_score else None
+                ),
+                "explanation": (
+                    eval_result.judge_score.explanation[:200] if eval_result.judge_score else ""
                 ),
                 "latency_ms": eval_result.model_response.latency_ms,
                 "cost_usd": eval_result.model_response.cost_usd or 0.0,

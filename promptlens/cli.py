@@ -20,7 +20,7 @@ from promptlens.exporters.html_exporter import HTMLExporter
 from promptlens.exporters.json_exporter import JSONExporter
 from promptlens.exporters.junit_exporter import JUnitXMLExporter
 from promptlens.exporters.markdown_exporter import MarkdownExporter
-from promptlens.models.config import RunConfig
+from promptlens.models.config import MAX_JUDGE_RUNS, RunConfig
 from promptlens.models.result import RunResult
 from promptlens.runners.runner import Runner
 
@@ -71,6 +71,30 @@ def _check_fail_under(result: "RunResult", fail_under: float) -> list:
         avg = result.get_average_score(model)
         if avg is None or avg < fail_under:
             failing.append((model, avg))
+    return failing
+
+
+def _check_max_flip_rate(result: "RunResult", max_flip_rate: float) -> list:
+    """Return models whose judge flip rate exceeds the stability gate.
+
+    The flip rate is the share of multi-run judged cases whose judge runs
+    disagreed with each other. A model with no multi-run scores cannot be
+    measured, so it fails the gate: a stability gate that silently passes
+    when the judge only ran once would be worse than no gate.
+
+    Args:
+        result: The completed run result
+        max_flip_rate: Highest acceptable flip rate (0.0 to 1.0)
+
+    Returns:
+        List of (model, flip_rate_or_None, unstable_case_ids) tuples that
+        fail the gate
+    """
+    failing = []
+    for model in result.models_tested:
+        flip_rate = result.get_flip_rate(model)
+        if flip_rate is None or flip_rate > max_flip_rate:
+            failing.append((model, flip_rate, result.get_unstable_case_ids(model)))
     return failing
 
 
@@ -130,12 +154,35 @@ def cli(log_level: str) -> None:
         "failure threshold used by the junit export format."
     ),
 )
+@click.option(
+    "--judge-runs",
+    type=click.IntRange(1, MAX_JUDGE_RUNS),
+    default=None,
+    help=(
+        "Call the judge this many times per response and aggregate the "
+        "scores (overrides judge.runs in the config). Exposes judge "
+        "non-determinism as a per-case agreement and a per-model flip rate. "
+        "Each extra run is one extra judge call."
+    ),
+)
+@click.option(
+    "--max-flip-rate",
+    type=click.FloatRange(0.0, 1.0),
+    default=None,
+    help=(
+        "Stability gate for CI: exit with code 2 if the share of cases whose "
+        "judge runs disagreed exceeds this value for any model. Requires "
+        "judge runs greater than 1 (set judge.runs or --judge-runs)."
+    ),
+)
 def run(
     config: str,
     golden_set: Optional[str],
     output_dir: Optional[str],
     dry_run: bool,
     fail_under: Optional[float],
+    judge_runs: Optional[int],
+    max_flip_rate: Optional[float],
 ) -> None:
     """Run evaluation with the given configuration file.
 
@@ -146,6 +193,7 @@ def run(
         promptlens run config.yaml --output-dir ./results
         promptlens run config.yaml --dry-run
         promptlens run config.yaml --fail-under 3.5
+        promptlens run config.yaml --judge-runs 5 --max-flip-rate 0.2
     """
     try:
         # Load config
@@ -158,6 +206,9 @@ def run(
         if output_dir:
             config_data.setdefault("output", {})
             config_data["output"]["directory"] = output_dir
+        if judge_runs is not None:
+            config_data.setdefault("judge", {})
+            config_data["judge"]["runs"] = judge_runs
 
         # Parse config
         try:
@@ -168,10 +219,18 @@ def run(
 
         console.print("[green]✓[/green] Configuration loaded successfully")
 
+        if max_flip_rate is not None and run_config.judge.runs < 2:
+            console.print(
+                "[red]Invalid configuration: --max-flip-rate needs judge runs greater "
+                "than 1. Set judge.runs in the config or pass --judge-runs.[/red]"
+            )
+            sys.exit(1)
+
         if dry_run:
             console.print("\n[yellow]Dry run mode - configuration is valid[/yellow]")
             console.print(f"  Golden set: {run_config.golden_set}")
             console.print(f"  Models: {len(run_config.models)}")
+            console.print(f"  Judge runs: {run_config.judge.runs} ({run_config.judge.aggregation})")
             console.print(f"  Output: {run_config.output.directory}")
             return
 
@@ -220,19 +279,50 @@ def run(
             console.print(f"\n[cyan]View report: file://{html_path.absolute()}[/cyan]")
 
         # Quality gate for CI
+        gate_failed = False
         if fail_under is not None:
             failing_models = _check_fail_under(result, fail_under)
             if failing_models:
+                gate_failed = True
                 console.print(
                     f"\n[bold red]✗ Quality gate failed (--fail-under {fail_under:g}):[/bold red]"
                 )
                 for model, avg in failing_models:
                     avg_display = f"{avg:.2f}" if avg is not None else "no scores"
                     console.print(f"  {model}: average judge score {avg_display}")
-                sys.exit(2)
-            console.print(
-                f"\n[bold green]✓ Quality gate passed (--fail-under {fail_under:g})[/bold green]"
-            )
+            else:
+                console.print(
+                    f"\n[bold green]✓ Quality gate passed (--fail-under {fail_under:g})[/bold green]"
+                )
+
+        # Stability gate for CI
+        if max_flip_rate is not None:
+            unstable_models = _check_max_flip_rate(result, max_flip_rate)
+            if unstable_models:
+                gate_failed = True
+                console.print(
+                    f"\n[bold red]✗ Stability gate failed "
+                    f"(--max-flip-rate {max_flip_rate:g}):[/bold red]"
+                )
+                for model, flip_rate, case_ids in unstable_models:
+                    if flip_rate is None:
+                        console.print(f"  {model}: no multi-run judge scores to measure")
+                        continue
+                    cases = ", ".join(case_ids[:10])
+                    if len(case_ids) > 10:
+                        cases += f", and {len(case_ids) - 10} more"
+                    console.print(
+                        f"  {model}: judge flip rate {flip_rate:.0%} "
+                        f"({len(case_ids)} unstable case(s): {cases})"
+                    )
+            else:
+                console.print(
+                    f"\n[bold green]✓ Stability gate passed "
+                    f"(--max-flip-rate {max_flip_rate:g})[/bold green]"
+                )
+
+        if gate_failed:
+            sys.exit(2)
 
     except Exception as e:
         console.print(f"\n[bold red]Error:[/bold red] {e}")
@@ -422,9 +512,7 @@ def compare(
         comparison = compare_runs(baseline_result, candidate_result, threshold=threshold)
 
         if not comparison.models_compared:
-            console.print(
-                "\n[yellow]The two runs share no models; nothing to compare.[/yellow]"
-            )
+            console.print("\n[yellow]The two runs share no models; nothing to compare.[/yellow]")
         if not comparison.cases and comparison.models_compared:
             console.print(
                 "\n[yellow]The two runs share no test cases; nothing to compare.[/yellow]"
@@ -477,8 +565,7 @@ def compare(
         ):
             if items:
                 console.print(
-                    f"\n[yellow]{label} (excluded from comparison): "
-                    f"{', '.join(items)}[/yellow]"
+                    f"\n[yellow]{label} (excluded from comparison): " f"{', '.join(items)}[/yellow]"
                 )
 
         # Optional file outputs
