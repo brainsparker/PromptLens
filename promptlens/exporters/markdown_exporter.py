@@ -59,9 +59,7 @@ class MarkdownExporter(BaseExporter):
         lines.append("|--------|-------|")
         lines.append(f"| Total Cost | ${result.total_cost_usd:.4f} |")
         lines.append(f"| Total Time | {result.total_time_ms:.0f}ms |")
-        lines.append(
-            f"| Test Cases | {len(result.results) // len(result.models_tested)} |"
-        )
+        lines.append(f"| Test Cases | {len(result.results) // len(result.models_tested)} |")
         lines.append(f"| Models | {len(result.models_tested)} |")
         lines.append("")
 
@@ -81,6 +79,13 @@ class MarkdownExporter(BaseExporter):
             lines.append("|--------|-------|")
             if avg_score is not None:
                 lines.append(f"| Average Score | {avg_score:.2f}/5.0 |")
+            flip_rate = result.get_flip_rate(model)
+            if flip_rate is not None:
+                unstable = len(result.get_unstable_case_ids(model))
+                lines.append(
+                    f"| Judge Stability | {1 - flip_rate:.0%} unanimous over "
+                    f"{result.get_judge_runs()} runs ({unstable} unstable) |"
+                )
             lines.append(f"| Total Cost | ${total_cost:.4f} |")
             lines.append(f"| Total Time | {total_latency:.0f}ms |")
             lines.append("")
@@ -109,11 +114,12 @@ class MarkdownExporter(BaseExporter):
             lines.append("|-------|-------|---------|------|----------|")
 
             for eval_result in evals:
-                score = (
-                    f"{eval_result.judge_score.score}/5"
-                    if eval_result.judge_score
-                    else "N/A"
-                )
+                score = "N/A"
+                if eval_result.judge_score:
+                    score = f"{eval_result.judge_score.score}/5"
+                    if len(eval_result.judge_score.samples) > 1:
+                        samples = ",".join(str(s) for s in eval_result.judge_score.samples)
+                        score += f" (runs: {samples})"
                 latency = f"{eval_result.model_response.latency_ms:.0f}ms"
                 cost = f"${eval_result.model_response.cost_usd:.4f}" if eval_result.model_response.cost_usd else "$0.00"
                 response = eval_result.model_response.content[:100].replace("\n", " ")

@@ -63,9 +63,7 @@ class JUnitXMLExporter(BaseExporter):
         total_time = 0.0
 
         for model in result.models_tested:
-            model_results = [
-                r for r in result.results if r.model_response.model == model
-            ]
+            model_results = [r for r in result.results if r.model_response.model == model]
             suite, stats = self._build_suite(result, model, model_results)
             testsuites.append(suite)
             total_tests += stats["tests"]
@@ -145,8 +143,7 @@ class JUnitXMLExporter(BaseExporter):
                 failure_el = ET.SubElement(testcase, "failure")
                 failure_el.set(
                     "message",
-                    f"Judge score {judge_score.score} is below "
-                    f"threshold {self.fail_under:g}",
+                    f"Judge score {judge_score.score} is below " f"threshold {self.fail_under:g}",
                 )
                 failure_el.set("type", "JudgeScoreBelowThreshold")
                 failure_el.text = (
@@ -165,9 +162,14 @@ class JUnitXMLExporter(BaseExporter):
             ]
             if judge_score is not None:
                 out_lines.append(f"judge_score: {judge_score.score}")
-                out_lines.append(
-                    f"judge_explanation: {_truncate(judge_score.explanation, 500)}"
-                )
+                if len(judge_score.samples) > 1:
+                    out_lines.append(f"judge_runs: {judge_score.runs}")
+                    out_lines.append(
+                        "judge_samples: " + " ".join(str(s) for s in judge_score.samples)
+                    )
+                    if judge_score.agreement is not None:
+                        out_lines.append(f"judge_agreement: {judge_score.agreement:.2f}")
+                out_lines.append(f"judge_explanation: {_truncate(judge_score.explanation, 500)}")
             system_out.text = "\n".join(out_lines)
 
         suite.set("tests", str(len(model_results)))
@@ -185,9 +187,11 @@ class JUnitXMLExporter(BaseExporter):
         avg_score = result.get_average_score(model)
         if avg_score is not None:
             _add_property(properties, "average_judge_score", f"{avg_score:.2f}")
-        _add_property(
-            properties, "total_cost_usd", f"{result.get_total_cost(model):.6f}"
-        )
+        flip_rate = result.get_flip_rate(model)
+        if flip_rate is not None:
+            _add_property(properties, "judge_runs", str(result.get_judge_runs()))
+            _add_property(properties, "judge_flip_rate", f"{flip_rate:.2f}")
+        _add_property(properties, "total_cost_usd", f"{result.get_total_cost(model):.6f}")
         _add_property(properties, "fail_under", f"{self.fail_under:g}")
         suite.insert(0, properties)
 

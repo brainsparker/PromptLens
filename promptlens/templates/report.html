@@ -87,6 +87,10 @@
   .badge.s5 { background: var(--score-5); }
   .badge.none { background: var(--muted); }
 
+  .stability { font-size: 13px; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; }
+  .samples { font-size: 12px; color: var(--muted); font-family: ui-monospace, SFMono-Regular, Menlo, monospace; }
+  .samples.flipped { color: var(--score-2); }
+
   footer { margin-top: 36px; font-size: 12px; color: var(--muted); }
 </style>
 </head>
@@ -115,6 +119,7 @@
       <th>Model</th>
       <th>Avg score</th>
       <th>Score distribution (1–5)</th>
+      {% if judge_runs > 1 %}<th>Judge stability ({{ judge_runs }} runs)</th>{% endif %}
       <th>Responses</th>
       <th>Total cost</th>
       <th>Total latency</th>
@@ -141,6 +146,15 @@
           {% endfor %}
         </div>
       </td>
+      {% if judge_runs > 1 %}
+      <td>
+        {% if m.flip_rate is not none %}
+        <span class="stability" title="{{ m.unstable_count }} case(s) got different scores across judge runs">{{ "%.0f" | format((1 - m.flip_rate) * 100) }}% unanimous</span>
+        {% else %}
+        <span class="badge none">–</span>
+        {% endif %}
+      </td>
+      {% endif %}
       <td>{{ m.result_count }}</td>
       <td>${{ "%.4f" | format(m.total_cost) }}</td>
       <td>{{ "%.0f" | format(m.total_latency) }} ms</td>
@@ -162,6 +176,9 @@
       <span class="provider">{{ r.provider }}</span>
       {% if r.score is not none %}
       <span class="badge s{{ r.score }}">{{ r.score }}/5</span>
+      {% if r.samples %}
+      <span class="samples{% if r.agreement is not none and r.agreement < 1 %} flipped{% endif %}" title="Individual judge run scores">runs: {{ r.samples | join(', ') }}</span>
+      {% endif %}
       {% else %}
       <span class="badge none">unscored</span>
       {% endif %}

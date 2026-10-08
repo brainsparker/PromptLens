@@ -65,22 +65,26 @@ class HTMLExporter(BaseExporter):
             total_latency = result.get_total_latency(model)
 
             # Get results for this model
-            model_results = [
-                r for r in result.results if r.model_response.model == model
-            ]
+            model_results = [r for r in result.results if r.model_response.model == model]
 
             # Score distribution
             scores = [r.judge_score.score for r in model_results if r.judge_score]
             score_dist = {i: scores.count(i) for i in range(1, 6)}
 
-            model_stats.append({
-                "name": model,
-                "average_score": avg_score,
-                "total_cost": total_cost,
-                "total_latency": total_latency,
-                "score_distribution": score_dist,
-                "result_count": len(model_results),
-            })
+            flip_rate = result.get_flip_rate(model)
+
+            model_stats.append(
+                {
+                    "name": model,
+                    "average_score": avg_score,
+                    "total_cost": total_cost,
+                    "total_latency": total_latency,
+                    "score_distribution": score_dist,
+                    "result_count": len(model_results),
+                    "flip_rate": flip_rate,
+                    "unstable_count": len(result.get_unstable_case_ids(model)),
+                }
+            )
 
         # Group results by test case
         test_case_results = {}
@@ -98,6 +102,14 @@ class HTMLExporter(BaseExporter):
                     "provider": eval_result.model_response.provider,
                     "response": eval_result.model_response.content,
                     "score": eval_result.judge_score.score if eval_result.judge_score else None,
+                    "samples": (
+                        eval_result.judge_score.samples
+                        if eval_result.judge_score and len(eval_result.judge_score.samples) > 1
+                        else []
+                    ),
+                    "agreement": (
+                        eval_result.judge_score.agreement if eval_result.judge_score else None
+                    ),
                     "explanation": (
                         eval_result.judge_score.explanation
                         if eval_result.judge_score
@@ -121,6 +133,7 @@ class HTMLExporter(BaseExporter):
             "model_stats": model_stats,
             "test_cases": list(test_case_results.values()),
             "models": result.models_tested,
+            "judge_runs": result.get_judge_runs(),
         }
 
     @property

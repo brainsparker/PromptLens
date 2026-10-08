@@ -82,6 +82,10 @@ class ModelConfig(BaseModel):
         return value
 
 
+JUDGE_AGGREGATIONS = ("median", "mean", "min")
+MAX_JUDGE_RUNS = 25
+
+
 class JudgeConfig(BaseModel):
     """Configuration for the judge.
 
@@ -91,6 +95,13 @@ class JudgeConfig(BaseModel):
         temperature: Sampling temperature
         custom_prompt: Optional custom judge prompt template
         criteria: List of criteria to evaluate
+        runs: Number of independent judge calls per response. Values above 1
+            sample the judge repeatedly and aggregate the scores, which
+            exposes judge non-determinism (flip rate) instead of hiding it
+            behind a single roll. Each extra run costs one extra judge call.
+        aggregation: How the sampled scores collapse into the final score:
+            "median" (default, robust to a single outlier), "mean" (rounded
+            to the nearest integer), or "min" (strictest, for safety gates).
     """
 
     provider: str = "anthropic"
@@ -98,6 +109,26 @@ class JudgeConfig(BaseModel):
     temperature: float = 0.3
     custom_prompt: Optional[str] = None
     criteria: List[str] = Field(default_factory=lambda: ["accuracy", "helpfulness"])
+    runs: int = 1
+    aggregation: str = "median"
+
+    @field_validator("runs")
+    @classmethod
+    def validate_runs(cls, value: int) -> int:
+        if value < 1:
+            raise ValueError("judge runs must be at least 1")
+        if value > MAX_JUDGE_RUNS:
+            raise ValueError(f"judge runs must be at most {MAX_JUDGE_RUNS}")
+        return value
+
+    @field_validator("aggregation")
+    @classmethod
+    def validate_aggregation(cls, value: str) -> str:
+        normalized = value.strip().lower()
+        if normalized not in JUDGE_AGGREGATIONS:
+            allowed = ", ".join(JUDGE_AGGREGATIONS)
+            raise ValueError(f"judge aggregation must be one of: {allowed}")
+        return normalized
 
 
 class ExecutionConfig(BaseModel):
@@ -160,7 +191,7 @@ class OutputConfig(BaseModel):
     @field_validator("formats")
     @classmethod
     def validate_formats(cls, value: List[str]) -> List[str]:
-        allowed = {"html", "json", "csv", "md"}
+        allowed = {"html", "json", "csv", "md", "junit"}
         normalized = [fmt.lower() for fmt in value]
         invalid = sorted({fmt for fmt in normalized if fmt not in allowed})
         if invalid:
