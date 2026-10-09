@@ -108,12 +108,15 @@ class ExecutionConfig(BaseModel):
         retry_attempts: Maximum retry attempts for failed requests
         retry_delay_seconds: Initial delay between retries
         timeout_seconds: Request timeout
+        samples: Times to run each test case per model. Values above 1
+            enable stability analysis (pass@k, pass^k, flaky cases).
     """
 
     parallel_requests: int = 3
     retry_attempts: int = 3
     retry_delay_seconds: float = 1.0
     timeout_seconds: int = 60
+    samples: int = 1
 
     @field_validator("parallel_requests")
     @classmethod
@@ -143,6 +146,13 @@ class ExecutionConfig(BaseModel):
             raise ValueError("timeout_seconds must be greater than 0")
         return value
 
+    @field_validator("samples")
+    @classmethod
+    def validate_samples(cls, value: int) -> int:
+        if value < 1:
+            raise ValueError("samples must be at least 1")
+        return value
+
 
 class OutputConfig(BaseModel):
     """Configuration for output settings.
@@ -160,7 +170,7 @@ class OutputConfig(BaseModel):
     @field_validator("formats")
     @classmethod
     def validate_formats(cls, value: List[str]) -> List[str]:
-        allowed = {"html", "json", "csv", "md"}
+        allowed = {"html", "json", "csv", "md", "junit"}
         normalized = [fmt.lower() for fmt in value]
         invalid = sorted({fmt for fmt in normalized if fmt not in allowed})
         if invalid:

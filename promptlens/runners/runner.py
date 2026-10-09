@@ -23,6 +23,7 @@ from promptlens.models.result import EvaluationResult, RunResult
 from promptlens.models.test_case import GoldenSet, TestCase
 from promptlens.providers.base import BaseProvider
 from promptlens.providers.factory import get_provider
+from promptlens.stability import compute_stability, format_scores
 
 logger = logging.getLogger(__name__)
 console = Console()
@@ -63,8 +64,15 @@ class Runner:
         if not self.providers:
             raise ValueError("No providers successfully initialized")
 
-        # Semaphore for rate limiting
-        self.semaphore = asyncio.Semaphore(config.execution.parallel_requests)
+        # Semaphore for rate limiting. Created inside run() so it binds to the
+        # event loop that actually executes the evaluation; on Python 3.9 a
+        # semaphore built here would attach to whatever loop (if any) is
+        # current at construction time.
+        self.semaphore: Optional[asyncio.Semaphore] = None
+
+        # Repeats per (test case, model). More than one enables stability
+        # analysis (pass@k, pass^k, flaky cases).
+        self.samples: int = config.execution.samples
 
     async def run(self) -> RunResult:
         """Run the complete evaluation.
@@ -77,7 +85,10 @@ class Runner:
         """
         console.print(f"\n[bold cyan]PromptLens Evaluation Run[/bold cyan]")
         console.print(f"Run ID: {self.run_id}")
-        console.print(f"Config: {self.config.output.run_name or 'Unnamed'}\n")
+        console.print(f"Config: {self.config.output.run_name or 'Unnamed'}")
+        if self.samples > 1:
+            console.print(f"Samples per test case: {self.samples}")
+        console.print()
 
         # Load golden set
         console.print(f"[yellow]Loading golden set...[/yellow]")
@@ -90,6 +101,7 @@ class Runner:
 
         # Run evaluations
         console.print(f"[yellow]Running evaluations...[/yellow]")
+        self.semaphore = asyncio.Semaphore(self.config.execution.parallel_requests)
         results = await self._run_evaluations(golden_set)
 
         # Calculate totals
@@ -110,6 +122,7 @@ class Runner:
                 "golden_set_path": self.config.golden_set,
                 "test_case_count": len(golden_set.test_cases),
                 "provider_count": len(self.providers),
+                "samples": self.samples,
             },
         )
 
@@ -133,7 +146,7 @@ class Runner:
         results: List[EvaluationResult] = []
 
         # Calculate total tasks
-        total_tasks = len(golden_set.test_cases) * len(self.providers)
+        total_tasks = len(golden_set.test_cases) * len(self.providers) * self.samples
 
         with Progress(
             SpinnerColumn(),
@@ -148,18 +161,21 @@ class Runner:
                 total=total_tasks,
             )
 
-            # Create tasks for all combinations
+            # Create tasks for all combinations. Samples are independent
+            # requests; nothing is shared between repeats of the same case.
             tasks = []
             for test_case in golden_set.test_cases:
                 for provider in self.providers:
-                    tasks.append(
-                        self._evaluate_single(
-                            test_case=test_case,
-                            provider=provider,
-                            progress=progress,
-                            task_id=task,
+                    for sample_index in range(self.samples):
+                        tasks.append(
+                            self._evaluate_single(
+                                test_case=test_case,
+                                provider=provider,
+                                progress=progress,
+                                task_id=task,
+                                sample_index=sample_index,
+                            )
                         )
-                    )
 
             # Run all tasks with concurrency control
             results = await asyncio.gather(*tasks, return_exceptions=True)
@@ -185,6 +201,7 @@ class Runner:
         provider: BaseProvider,
         progress: Progress,
         task_id: any,
+        sample_index: int = 0,
     ) -> EvaluationResult:
         """Evaluate a single test case with a single provider.
 
@@ -193,10 +210,13 @@ class Runner:
             provider: Provider to use
             progress: Progress bar instance
             task_id: Task ID for progress updates
+            sample_index: Which repeat of this (test case, provider) pair
 
         Returns:
             EvaluationResult
         """
+        if self.semaphore is None:
+            self.semaphore = asyncio.Semaphore(self.config.execution.parallel_requests)
         async with self.semaphore:
             # Check if tools are requested but provider doesn't support them
             if test_case.tools and not provider.supports_tools():
@@ -233,6 +253,7 @@ class Runner:
                 model_response=model_response,
                 judge_score=judge_score,
                 timestamp=datetime.utcnow(),
+                sample_index=sample_index,
             )
 
     def _print_summary(self, result: RunResult) -> None:
@@ -260,5 +281,65 @@ class Runner:
         console.print(f"[bold]Overall[/bold]")
         console.print(f"  Total Cost: ${result.total_cost_usd:.4f}")
         console.print(f"  Total Time: {result.total_time_ms:.0f}ms")
-        console.print(f"  Test Cases: {len(result.results) // len(result.models_tested)}")
+        console.print(f"  Test Cases: {result.test_case_count}")
+        if result.sample_count > 1:
+            console.print(f"  Samples per Test Case: {result.sample_count}")
+        console.print()
+
+        if result.sample_count > 1:
+            print_stability_summary(result)
+
+
+def print_stability_summary(result: RunResult, pass_threshold: Optional[float] = None) -> None:
+    """Print pass@k, pass^k and flaky cases for a multi-sample run.
+
+    Args:
+        result: The run result to summarize
+        pass_threshold: Judge score at or above which a sample passes.
+            Defaults to the run's recorded threshold, then 3.0.
+    """
+    report = compute_stability(result, pass_threshold)
+    k = report.samples
+    console.print(
+        f"[bold green]═══ Stability ({k} samples per test case, "
+        f"pass threshold {report.pass_threshold:g}) ═══[/bold green]\n"
+    )
+
+    for model in report.models:
+        console.print(f"[bold]{model.model}[/bold]")
+        if model.scored_cases == 0:
+            console.print("  No judge scores available")
+            console.print()
+            continue
+        console.print(
+            f"  pass@{k}: {model.pass_at_k:.0%} "
+            f"({model.pass_at_k_cases}/{model.scored_cases} cases passed at least once)"
+        )
+        console.print(
+            f"  pass^{k}: {model.pass_hat_k:.0%} "
+            f"({model.pass_hat_k_cases}/{model.scored_cases} cases passed every time)"
+        )
+        flaky_style = "red" if model.flaky_cases else "green"
+        console.print(
+            f"  Flaky cases: [{flaky_style}]{model.flaky_cases}[/{flaky_style}]"
+            f" ({model.flaky_rate:.0%})"
+        )
+        if model.mean_score is not None and model.score_ci_low is not None:
+            console.print(
+                f"  Mean Score: {model.mean_score:.2f} "
+                f"(95% CI {model.score_ci_low:.2f} to {model.score_ci_high:.2f})"
+            )
+        if model.mean_case_std_dev is not None:
+            console.print(f"  Mean within-case std dev: {model.mean_case_std_dev:.2f}")
+        console.print()
+
+    flaky = report.flaky_cases
+    if flaky:
+        console.print("[bold]Flaky cases[/bold] (passed in some samples, failed in others)")
+        for case in flaky:
+            console.print(
+                f"  [yellow]~[/yellow] {case.test_case_id} ({case.model}): "
+                f"scores {format_scores(case.scores)}, "
+                f"passed {case.passed_samples}/{case.scored_samples}"
+            )
         console.print()

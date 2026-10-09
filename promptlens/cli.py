@@ -14,7 +14,7 @@ from rich.console import Console
 from rich.logging import RichHandler
 
 from promptlens import __version__
-from promptlens.comparison import DEFAULT_THRESHOLD, compare_runs, render_markdown
+from promptlens.comparison import DEFAULT_THRESHOLD, compare_runs, format_score, render_markdown
 from promptlens.exporters.csv_exporter import CSVExporter
 from promptlens.exporters.html_exporter import HTMLExporter
 from promptlens.exporters.json_exporter import JSONExporter
@@ -23,6 +23,7 @@ from promptlens.exporters.markdown_exporter import MarkdownExporter
 from promptlens.models.config import RunConfig
 from promptlens.models.result import RunResult
 from promptlens.runners.runner import Runner
+from promptlens.stability import DEFAULT_PASS_THRESHOLD, compute_stability
 
 
 def _load_config_data(config_path: str) -> dict:
@@ -51,6 +52,23 @@ def _remove_path_if_exists(path: Path) -> None:
         path.unlink(missing_ok=True)
     elif path.exists():
         shutil.rmtree(path)
+
+
+def _check_fail_on_flaky(result: "RunResult", pass_threshold: float) -> list:
+    """Return the flaky (test case, model) pairs for the --fail-on-flaky gate.
+
+    A pair is flaky when it passed the threshold in some samples and failed
+    it in others. Pairs with no judge scores are not flaky; they are
+    reported separately by the JUnit exporter as skipped.
+
+    Args:
+        result: The run result to check
+        pass_threshold: Judge score (1-5) at or above which a sample passes
+
+    Returns:
+        List of CaseStability entries that flipped between pass and fail
+    """
+    return compute_stability(result, pass_threshold).flaky_cases
 
 
 def _check_fail_under(result: "RunResult", fail_under: float) -> list:
@@ -130,12 +148,33 @@ def cli(log_level: str) -> None:
         "failure threshold used by the junit export format."
     ),
 )
+@click.option(
+    "--samples",
+    type=click.IntRange(min=1),
+    default=None,
+    help=(
+        "Run each test case this many times per model (overrides "
+        "execution.samples in the config). Values above 1 add a stability "
+        "report: pass@k, pass^k, score spread, and flaky cases."
+    ),
+)
+@click.option(
+    "--fail-on-flaky",
+    is_flag=True,
+    help=(
+        "Quality gate for CI: exit with code 2 if any test case passed the "
+        "threshold in some samples and failed it in others. The threshold is "
+        "--fail-under when given, otherwise 3.0. Requires --samples 2 or more."
+    ),
+)
 def run(
     config: str,
     golden_set: Optional[str],
     output_dir: Optional[str],
     dry_run: bool,
     fail_under: Optional[float],
+    samples: Optional[int],
+    fail_on_flaky: bool,
 ) -> None:
     """Run evaluation with the given configuration file.
 
@@ -146,6 +185,7 @@ def run(
         promptlens run config.yaml --output-dir ./results
         promptlens run config.yaml --dry-run
         promptlens run config.yaml --fail-under 3.5
+        promptlens run config.yaml --samples 5 --fail-under 3.5 --fail-on-flaky
     """
     try:
         # Load config
@@ -158,6 +198,9 @@ def run(
         if output_dir:
             config_data.setdefault("output", {})
             config_data["output"]["directory"] = output_dir
+        if samples is not None:
+            config_data.setdefault("execution", {})
+            config_data["execution"]["samples"] = samples
 
         # Parse config
         try:
@@ -168,10 +211,23 @@ def run(
 
         console.print("[green]✓[/green] Configuration loaded successfully")
 
+        effective_samples = run_config.execution.samples
+        if fail_on_flaky and effective_samples < 2:
+            console.print(
+                "[red]--fail-on-flaky needs at least 2 samples per test case; "
+                "pass --samples 2 or more (or set execution.samples in the config).[/red]"
+            )
+            sys.exit(1)
+
+        # The per-sample pass threshold shared by the JUnit exporter, the
+        # stability report, and the --fail-on-flaky gate.
+        pass_threshold = DEFAULT_PASS_THRESHOLD if fail_under is None else float(fail_under)
+
         if dry_run:
             console.print("\n[yellow]Dry run mode - configuration is valid[/yellow]")
             console.print(f"  Golden set: {run_config.golden_set}")
             console.print(f"  Models: {len(run_config.models)}")
+            console.print(f"  Samples per test case: {effective_samples}")
             console.print(f"  Output: {run_config.output.directory}")
             return
 
@@ -179,6 +235,10 @@ def run(
         console.print(f"\n[bold cyan]Starting evaluation...[/bold cyan]\n")
         runner = Runner(run_config)
         result = asyncio.run(runner.run())
+
+        # Record the threshold so exporters and later `promptlens export`
+        # calls analyze stability with the same pass/fail line.
+        result.metadata["pass_threshold"] = pass_threshold
 
         # Export results
         console.print(f"\n[yellow]Exporting results...[/yellow]")
@@ -219,20 +279,46 @@ def run(
             html_path = run_output_dir / "report.html"
             console.print(f"\n[cyan]View report: file://{html_path.absolute()}[/cyan]")
 
-        # Quality gate for CI
+        # Quality gates for CI. Both are checked so the log shows every
+        # failure, then a single exit code 2 fails the build.
+        gate_failed = False
         if fail_under is not None:
             failing_models = _check_fail_under(result, fail_under)
             if failing_models:
+                gate_failed = True
                 console.print(
                     f"\n[bold red]✗ Quality gate failed (--fail-under {fail_under:g}):[/bold red]"
                 )
                 for model, avg in failing_models:
                     avg_display = f"{avg:.2f}" if avg is not None else "no scores"
                     console.print(f"  {model}: average judge score {avg_display}")
-                sys.exit(2)
-            console.print(
-                f"\n[bold green]✓ Quality gate passed (--fail-under {fail_under:g})[/bold green]"
-            )
+            else:
+                console.print(
+                    f"\n[bold green]✓ Quality gate passed (--fail-under {fail_under:g})[/bold green]"
+                )
+
+        if fail_on_flaky:
+            flaky_cases = _check_fail_on_flaky(result, pass_threshold)
+            if flaky_cases:
+                gate_failed = True
+                console.print(
+                    f"\n[bold red]✗ Stability gate failed (--fail-on-flaky, "
+                    f"threshold {pass_threshold:g}): {len(flaky_cases)} flaky case(s)[/bold red]"
+                )
+                for case in flaky_cases:
+                    scores = ", ".join(str(score) for score in case.scores)
+                    console.print(
+                        f"  {case.test_case_id} ({case.model}): scores {scores}, "
+                        f"passed {case.passed_samples}/{case.scored_samples} samples"
+                    )
+            else:
+                console.print(
+                    f"\n[bold green]✓ Stability gate passed (--fail-on-flaky, "
+                    f"{result.sample_count} samples per test case)[/bold green]"
+                )
+
+        if gate_failed:
+            sys.exit(2)
 
     except Exception as e:
         console.print(f"\n[bold red]Error:[/bold red] {e}")
@@ -461,8 +547,8 @@ def compare(
 
         # Regressed case details
         for case in comparison.regressed_cases:
-            before = case.baseline_score if case.baseline_score is not None else "-"
-            after = case.candidate_score if case.candidate_score is not None else "-"
+            before = format_score(case.baseline_score)
+            after = format_score(case.candidate_score)
             console.print(
                 f"  [red]✗[/red] {case.test_case_id} ({case.model}): "
                 f"{before} → {after} ({case.reason})"
@@ -571,13 +657,15 @@ def export(run_id: str, export_format: str, output: Optional[str], output_dir: s
             }
             output = f"export_{run_id}{extensions[export_format]}"
 
-        # Export
+        # Export. Reuse the pass threshold the run was gated with, if the
+        # run recorded one, so re-exported reports agree with the original.
+        recorded_threshold = result.metadata.get("pass_threshold")
         exporters = {
             "json": JSONExporter(),
             "csv": CSVExporter(),
             "md": MarkdownExporter(),
             "html": HTMLExporter(),
-            "junit": JUnitXMLExporter(),
+            "junit": JUnitXMLExporter(fail_under=recorded_threshold),
         }
 
         exporter = exporters[export_format]

@@ -12,6 +12,13 @@ Mapping rules:
     - A test case that was never judged (judging disabled or judge failed)
       is reported as <skipped>, so CI does not report a false pass.
     - Everything else is a pass.
+
+Multi-sample runs (``--samples N``) still emit one <testcase> per golden-set
+entry. The entry passes only when every scored sample passed (pass^k), so a
+flaky case shows up as a failure with type FlakyJudgeScore and the full list
+of per-sample scores. A case errors only when every sample errored; errored
+samples alongside scored ones are listed in system-out and left out of the
+pass/fail decision, so infrastructure noise is never reported as quality.
 """
 
 import logging
@@ -20,12 +27,14 @@ from typing import List, Optional
 
 from promptlens.exporters.base import BaseExporter
 from promptlens.models.result import EvaluationResult, RunResult
+from promptlens.stability import DEFAULT_PASS_THRESHOLD, analyze_case, group_samples
 
 logger = logging.getLogger(__name__)
 
 # Judge scores are on a 1-5 scale. Scores below this value count as failures
-# unless a different threshold is provided.
-DEFAULT_FAIL_UNDER = 3.0
+# unless a different threshold is provided. Shared with the stability report
+# and the --fail-on-flaky gate so every surface draws the same pass line.
+DEFAULT_FAIL_UNDER = DEFAULT_PASS_THRESHOLD
 
 
 class JUnitXMLExporter(BaseExporter):
@@ -62,11 +71,15 @@ class JUnitXMLExporter(BaseExporter):
         total_skipped = 0
         total_time = 0.0
 
+        multi_sample = result.sample_count > 1
         for model in result.models_tested:
             model_results = [
                 r for r in result.results if r.model_response.model == model
             ]
-            suite, stats = self._build_suite(result, model, model_results)
+            if multi_sample:
+                suite, stats = self._build_multi_sample_suite(result, model, model_results)
+            else:
+                suite, stats = self._build_suite(result, model, model_results)
             testsuites.append(suite)
             total_tests += stats["tests"]
             total_failures += stats["failures"]
@@ -170,7 +183,165 @@ class JUnitXMLExporter(BaseExporter):
                 )
             system_out.text = "\n".join(out_lines)
 
-        suite.set("tests", str(len(model_results)))
+        self._finish_suite(
+            suite, result, model, provider, len(model_results), failures, errors, skipped, suite_time
+        )
+
+        stats = {
+            "tests": len(model_results),
+            "failures": failures,
+            "errors": errors,
+            "skipped": skipped,
+            "time": suite_time,
+        }
+        return suite, stats
+
+    def _build_multi_sample_suite(
+        self,
+        result: RunResult,
+        model: str,
+        model_results: List[EvaluationResult],
+    ) -> tuple:
+        """Build a <testsuite> for one model of a multi-sample run.
+
+        One <testcase> per golden-set entry, judged on pass^k: the entry
+        passes only when every scored sample is at or above the threshold.
+
+        Args:
+            result: The full run result (for run-level metadata)
+            model: Model identifier for this suite
+            model_results: Evaluation results belonging to this model
+
+        Returns:
+            Tuple of (testsuite Element, stats dict)
+        """
+        suite = ET.Element("testsuite")
+        suite.set("name", model)
+
+        failures = 0
+        errors = 0
+        skipped = 0
+        suite_time = 0.0
+        provider = None
+        tests = 0
+
+        groups = group_samples(result)
+        for (case_id, group_model), samples in groups.items():
+            if group_model != model:
+                continue
+            tests += 1
+            stability = analyze_case(case_id, model, samples, self.fail_under)
+            first = samples[0]
+            provider = first.model_response.provider
+            case_time = sum((r.model_response.latency_ms or 0.0) for r in samples) / 1000.0
+            suite_time += case_time
+
+            testcase = ET.SubElement(suite, "testcase")
+            testcase.set("name", case_id)
+            testcase.set("classname", f"{result.golden_set_name}.{model}")
+            testcase.set("time", f"{case_time:.3f}")
+
+            errored = [r for r in samples if r.model_response.error]
+            scores_text = ", ".join(str(score) for score in stability.scores) or "-"
+
+            if len(errored) == len(samples):
+                errors += 1
+                messages = "; ".join(
+                    _truncate(r.model_response.error or "", 120) for r in errored
+                )
+                error_el = ET.SubElement(testcase, "error")
+                error_el.set("message", _truncate(f"All {len(samples)} samples errored: {messages}", 300))
+                error_el.set("type", "ModelResponseError")
+                error_el.text = "\n".join(
+                    f"sample {r.sample_index + 1}: {r.model_response.error}" for r in errored
+                )
+            elif stability.scored_samples == 0:
+                skipped += 1
+                skipped_el = ET.SubElement(testcase, "skipped")
+                skipped_el.set(
+                    "message",
+                    "No judge score available in any sample (judging disabled or judge failed)",
+                )
+            elif not stability.pass_hat_k:
+                failures += 1
+                failed = stability.scored_samples - stability.passed_samples
+                failure_el = ET.SubElement(testcase, "failure")
+                if stability.flaky:
+                    failure_el.set("type", "FlakyJudgeScore")
+                    failure_el.set(
+                        "message",
+                        f"Flaky: {failed} of {stability.scored_samples} samples scored below "
+                        f"threshold {self.fail_under:g} (scores: {scores_text})",
+                    )
+                else:
+                    failure_el.set("type", "JudgeScoreBelowThreshold")
+                    failure_el.set(
+                        "message",
+                        f"All {stability.scored_samples} samples scored below "
+                        f"threshold {self.fail_under:g} (scores: {scores_text})",
+                    )
+                explanations = "\n".join(
+                    f"sample {r.sample_index + 1} (score {r.judge_score.score}): "
+                    f"{_truncate(r.judge_score.explanation, 400)}"
+                    for r in samples
+                    if r.judge_score is not None
+                )
+                failure_el.text = (
+                    f"Query: {_truncate(first.query, 500)}\n"
+                    f"Expected: {_truncate(first.expected_behavior, 500)}\n"
+                    f"Scores: {scores_text}\n"
+                    f"Passed: {stability.passed_samples}/{stability.scored_samples}\n"
+                    f"{explanations}"
+                )
+
+            system_out = ET.SubElement(testcase, "system-out")
+            out_lines = [
+                f"provider: {provider}",
+                f"samples: {len(samples)}",
+                f"scored_samples: {stability.scored_samples}",
+                f"errored_samples: {stability.errored_samples}",
+                f"judge_scores: {scores_text}",
+                f"passed_samples: {stability.passed_samples}",
+                f"pass_at_k: {str(stability.pass_at_k).lower()}",
+                f"pass_hat_k: {str(stability.pass_hat_k).lower()}",
+                f"flaky: {str(stability.flaky).lower()}",
+                f"total_latency_ms: {sum((r.model_response.latency_ms or 0.0) for r in samples)}",
+                f"total_cost_usd: {sum((r.model_response.cost_usd or 0.0) for r in samples)}",
+            ]
+            if stability.mean_score is not None:
+                out_lines.append(f"mean_judge_score: {stability.mean_score:.2f}")
+            if stability.std_dev is not None:
+                out_lines.append(f"judge_score_std_dev: {stability.std_dev:.2f}")
+            system_out.text = "\n".join(out_lines)
+
+        self._finish_suite(
+            suite, result, model, provider, tests, failures, errors, skipped, suite_time
+        )
+        _add_property(suite.find("properties"), "samples", str(result.sample_count))
+
+        stats = {
+            "tests": tests,
+            "failures": failures,
+            "errors": errors,
+            "skipped": skipped,
+            "time": suite_time,
+        }
+        return suite, stats
+
+    def _finish_suite(
+        self,
+        suite: ET.Element,
+        result: RunResult,
+        model: str,
+        provider: Optional[str],
+        tests: int,
+        failures: int,
+        errors: int,
+        skipped: int,
+        suite_time: float,
+    ) -> None:
+        """Set suite counters and insert the run-level <properties> block."""
+        suite.set("tests", str(tests))
         suite.set("failures", str(failures))
         suite.set("errors", str(errors))
         suite.set("skipped", str(skipped))
@@ -190,15 +361,6 @@ class JUnitXMLExporter(BaseExporter):
         )
         _add_property(properties, "fail_under", f"{self.fail_under:g}")
         suite.insert(0, properties)
-
-        stats = {
-            "tests": len(model_results),
-            "failures": failures,
-            "errors": errors,
-            "skipped": skipped,
-            "time": suite_time,
-        }
-        return suite, stats
 
     @property
     def file_extension(self) -> str:

@@ -8,6 +8,7 @@ from jinja2 import Environment, FileSystemLoader, select_autoescape
 
 from promptlens.exporters.base import BaseExporter
 from promptlens.models.result import RunResult
+from promptlens.stability import compute_stability
 
 logger = logging.getLogger(__name__)
 
@@ -95,6 +96,7 @@ class HTMLExporter(BaseExporter):
             test_case_results[eval_result.test_case_id]["model_results"].append(
                 {
                     "model": eval_result.model_response.model,
+                    "sample_index": eval_result.sample_index,
                     "provider": eval_result.model_response.provider,
                     "response": eval_result.model_response.content,
                     "score": eval_result.judge_score.score if eval_result.judge_score else None,
@@ -109,6 +111,23 @@ class HTMLExporter(BaseExporter):
                 }
             )
 
+        # Stability analysis for multi-sample runs
+        samples = result.sample_count
+        stability = None
+        if samples > 1:
+            report = compute_stability(result)
+            flaky_keys = {(c.test_case_id, c.model) for c in report.flaky_cases}
+            for case in test_case_results.values():
+                case["flaky_models"] = sorted(
+                    model for (case_id, model) in flaky_keys if case_id == case["id"]
+                )
+            stability = {
+                "samples": report.samples,
+                "pass_threshold": report.pass_threshold,
+                "models": [m.model_dump() for m in report.models],
+                "flaky_cases": [c.model_dump() for c in report.flaky_cases],
+            }
+
         return {
             "run_id": result.run_id,
             "run_name": result.run_name or "Unnamed Run",
@@ -121,6 +140,8 @@ class HTMLExporter(BaseExporter):
             "model_stats": model_stats,
             "test_cases": list(test_case_results.values()),
             "models": result.models_tested,
+            "samples": samples,
+            "stability": stability,
         }
 
     @property

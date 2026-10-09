@@ -30,9 +30,13 @@ class CaseComparison(BaseModel):
         test_case_id: ID of the test case
         model: Model identifier the pair was evaluated on
         query: The test case query (taken from the candidate run)
-        baseline_score: Judge score in the baseline run (1-5), if judged
-        candidate_score: Judge score in the candidate run (1-5), if judged
+        baseline_score: Judge score in the baseline run (1-5), if judged.
+            For multi-sample runs this is the mean over scored samples.
+        candidate_score: Judge score in the candidate run (1-5), if judged.
+            For multi-sample runs this is the mean over scored samples.
         score_delta: candidate_score - baseline_score, if both are present
+        baseline_samples: Samples behind baseline_score (1 for single runs)
+        candidate_samples: Samples behind candidate_score (1 for single runs)
         baseline_cost_usd: Cost of the baseline response
         candidate_cost_usd: Cost of the candidate response
         baseline_latency_ms: Latency of the baseline response
@@ -46,9 +50,11 @@ class CaseComparison(BaseModel):
     test_case_id: str
     model: str
     query: str = ""
-    baseline_score: Optional[int] = None
-    candidate_score: Optional[int] = None
-    score_delta: Optional[int] = None
+    baseline_score: Optional[float] = None
+    candidate_score: Optional[float] = None
+    score_delta: Optional[float] = None
+    baseline_samples: int = 1
+    candidate_samples: int = 1
     baseline_cost_usd: Optional[float] = None
     candidate_cost_usd: Optional[float] = None
     baseline_latency_ms: Optional[float] = None
@@ -110,6 +116,8 @@ class ComparisonResult(BaseModel):
         candidate_timestamp: When the candidate run started
         golden_set_name: Golden set name (from the candidate run)
         threshold: Minimum absolute score delta counted as a change
+        baseline_samples: Samples per test case in the baseline run
+        candidate_samples: Samples per test case in the candidate run
         models_compared: Models present in both runs
         models_added: Models only in the candidate run
         models_removed: Models only in the baseline run
@@ -128,6 +136,8 @@ class ComparisonResult(BaseModel):
     candidate_timestamp: Optional[datetime] = None
     golden_set_name: str = ""
     threshold: float = 1.0
+    baseline_samples: int = 1
+    candidate_samples: int = 1
     models_compared: List[str] = Field(default_factory=list)
     models_added: List[str] = Field(default_factory=list)
     models_removed: List[str] = Field(default_factory=list)

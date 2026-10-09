@@ -54,6 +54,7 @@ class CSVExporter(BaseExporter):
                 "run_id": result.run_id,
                 "run_name": result.run_name or "",
                 "test_case_id": eval_result.test_case_id,
+                "sample_index": eval_result.sample_index,
                 "query": eval_result.query[:100],  # Truncate for CSV
                 "expected_behavior": eval_result.expected_behavior[:100],
                 "model": eval_result.model_response.model,

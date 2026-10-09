@@ -95,6 +95,9 @@ class EvaluationResult(BaseModel):
         model_response: The model's response with metadata
         judge_score: Score from the judge (if judging was performed)
         timestamp: When the evaluation was performed
+        sample_index: Which repeat of the test case this is (0-based). Runs
+            with ``--samples N`` produce N results per (test case, model)
+            pair, indexed 0..N-1. Single-sample runs always use 0.
     """
 
     test_case_id: str
@@ -103,6 +106,7 @@ class EvaluationResult(BaseModel):
     model_response: ModelResponse
     judge_score: Optional[JudgeScore] = None
     timestamp: datetime = Field(default_factory=datetime.utcnow)
+    sample_index: int = Field(default=0, ge=0)
 
 
 class RunResult(BaseModel):
@@ -129,6 +133,26 @@ class RunResult(BaseModel):
     total_cost_usd: float = 0.0
     total_time_ms: float = 0.0
     metadata: Dict[str, Any] = Field(default_factory=dict)
+
+    @property
+    def sample_count(self) -> int:
+        """Samples run per (test case, model) pair.
+
+        Taken from the ``samples`` metadata written by the runner, falling
+        back to the highest sample_index seen in the results. Always at
+        least 1, so older results files load as single-sample runs.
+        """
+        recorded = self.metadata.get("samples")
+        if isinstance(recorded, int) and recorded >= 1:
+            return recorded
+        if not self.results:
+            return 1
+        return max(r.sample_index for r in self.results) + 1
+
+    @property
+    def test_case_count(self) -> int:
+        """Distinct test cases in this run."""
+        return len({r.test_case_id for r in self.results})
 
     def get_average_score(self, model: Optional[str] = None) -> Optional[float]:
         """Calculate average score for a specific model or all models.

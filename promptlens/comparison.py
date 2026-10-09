@@ -7,6 +7,7 @@ before and after a prompt or model change, then compare the two runs.
 """
 
 import logging
+from dataclasses import dataclass
 from typing import Dict, List, Optional, Tuple
 
 from promptlens.models.comparison import (
@@ -34,22 +35,88 @@ logger = logging.getLogger(__name__)
 DEFAULT_THRESHOLD = 1.0
 
 
-def _index_results(run: RunResult) -> Dict[Tuple[str, str], EvaluationResult]:
+@dataclass
+class _CaseView:
+    """One (test case, model) pair reduced to the fields a comparison needs.
+
+    A single-sample run maps one EvaluationResult to one view. A multi-sample
+    run (``--samples N``) collapses its N results into one view: the score is
+    the mean of the scored samples, cost and latency are per-sample averages
+    (so they stay comparable with single-sample runs), and the pair counts as
+    errored only when every sample errored.
+    """
+
+    test_case_id: str
+    model: str
+    query: str
+    score: Optional[float]
+    cost_usd: Optional[float]
+    latency_ms: Optional[float]
+    error: Optional[str]
+    samples: int = 1
+
+
+def _view_single(result: EvaluationResult) -> _CaseView:
+    return _CaseView(
+        test_case_id=result.test_case_id,
+        model=result.model_response.model,
+        query=result.query,
+        score=float(result.judge_score.score) if result.judge_score else None,
+        cost_usd=result.model_response.cost_usd,
+        latency_ms=result.model_response.latency_ms,
+        error=result.model_response.error,
+    )
+
+
+def _view_samples(samples: List[EvaluationResult]) -> _CaseView:
+    """Collapse the samples of one (test case, model) pair into a view."""
+    first = samples[0]
+    errored = [r for r in samples if r.model_response.error]
+    scores = [float(r.judge_score.score) for r in samples if r.judge_score and not r.model_response.error]
+    costs = [r.model_response.cost_usd for r in samples if r.model_response.cost_usd is not None]
+    latencies = [r.model_response.latency_ms for r in samples if r.model_response.latency_ms is not None]
+
+    error = None
+    if len(errored) == len(samples):
+        error = errored[0].model_response.error
+
+    return _CaseView(
+        test_case_id=first.test_case_id,
+        model=first.model_response.model,
+        query=first.query,
+        score=_average(scores),
+        cost_usd=_average(costs),
+        latency_ms=_average(latencies),
+        error=error,
+        samples=len(samples),
+    )
+
+
+def _index_results(run: RunResult) -> Dict[Tuple[str, str], _CaseView]:
     """Index a run's results by (test_case_id, model).
 
-    If a pair appears more than once, the first occurrence wins.
+    Multi-sample runs are aggregated per pair (see _CaseView). In a
+    single-sample run, if a pair appears more than once the first occurrence
+    wins, matching the exporters' behavior.
     """
-    index: Dict[Tuple[str, str], EvaluationResult] = {}
+    if run.sample_count > 1:
+        grouped: Dict[Tuple[str, str], List[EvaluationResult]] = {}
+        for result in run.results:
+            key = (result.test_case_id, result.model_response.model)
+            grouped.setdefault(key, []).append(result)
+        return {key: _view_samples(samples) for key, samples in grouped.items()}
+
+    index: Dict[Tuple[str, str], _CaseView] = {}
     for result in run.results:
         key = (result.test_case_id, result.model_response.model)
         if key not in index:
-            index[key] = result
+            index[key] = _view_single(result)
     return index
 
 
 def _classify(
-    baseline: EvaluationResult,
-    candidate: EvaluationResult,
+    baseline: _CaseView,
+    candidate: _CaseView,
     threshold: float,
 ) -> Tuple[str, str]:
     """Classify a paired case as regressed, improved, unchanged, or incomparable.
@@ -67,8 +134,8 @@ def _classify(
        pass would be misleading.
     6. A case with no baseline score cannot be compared.
     """
-    baseline_error = baseline.model_response.error
-    candidate_error = candidate.model_response.error
+    baseline_error = baseline.error
+    candidate_error = candidate.error
 
     if candidate_error and not baseline_error:
         return STATUS_REGRESSED, REASON_NEW_ERROR
@@ -77,8 +144,8 @@ def _classify(
     if baseline_error and candidate_error:
         return STATUS_UNCHANGED, REASON_BOTH_ERRORED
 
-    baseline_score = baseline.judge_score.score if baseline.judge_score else None
-    candidate_score = candidate.judge_score.score if candidate.judge_score else None
+    baseline_score = baseline.score
+    candidate_score = candidate.score
 
     if baseline_score is not None and candidate_score is not None:
         delta = candidate_score - baseline_score
@@ -96,32 +163,32 @@ def _classify(
 
 
 def _build_case_comparison(
-    baseline: EvaluationResult,
-    candidate: EvaluationResult,
+    baseline: _CaseView,
+    candidate: _CaseView,
     threshold: float,
 ) -> CaseComparison:
     """Build a CaseComparison for one paired (test case, model)."""
     status, reason = _classify(baseline, candidate, threshold)
 
-    baseline_score = baseline.judge_score.score if baseline.judge_score else None
-    candidate_score = candidate.judge_score.score if candidate.judge_score else None
     score_delta = None
-    if baseline_score is not None and candidate_score is not None:
-        score_delta = candidate_score - baseline_score
+    if baseline.score is not None and candidate.score is not None:
+        score_delta = candidate.score - baseline.score
 
     return CaseComparison(
         test_case_id=candidate.test_case_id,
-        model=candidate.model_response.model,
+        model=candidate.model,
         query=candidate.query,
-        baseline_score=baseline_score,
-        candidate_score=candidate_score,
+        baseline_score=baseline.score,
+        candidate_score=candidate.score,
         score_delta=score_delta,
-        baseline_cost_usd=baseline.model_response.cost_usd,
-        candidate_cost_usd=candidate.model_response.cost_usd,
-        baseline_latency_ms=baseline.model_response.latency_ms,
-        candidate_latency_ms=candidate.model_response.latency_ms,
-        baseline_error=baseline.model_response.error,
-        candidate_error=candidate.model_response.error,
+        baseline_samples=baseline.samples,
+        candidate_samples=candidate.samples,
+        baseline_cost_usd=baseline.cost_usd,
+        candidate_cost_usd=candidate.cost_usd,
+        baseline_latency_ms=baseline.latency_ms,
+        candidate_latency_ms=candidate.latency_ms,
+        baseline_error=baseline.error,
+        candidate_error=candidate.error,
         status=status,
         reason=reason,
     )
@@ -236,6 +303,8 @@ def compare_runs(
         candidate_timestamp=candidate.timestamp,
         golden_set_name=candidate.golden_set_name,
         threshold=threshold,
+        baseline_samples=baseline.sample_count,
+        candidate_samples=candidate.sample_count,
         models_compared=models_compared,
         models_added=models_added,
         models_removed=models_removed,
@@ -249,6 +318,20 @@ def compare_runs(
 def _format_optional(value: Optional[float], fmt: str, missing: str = "-") -> str:
     """Format an optional number, or a placeholder when missing."""
     return fmt.format(value) if value is not None else missing
+
+
+def format_score(value: Optional[float], signed: bool = False) -> str:
+    """Format a judge score or delta.
+
+    Single-sample scores are integers and print as such (``4``, ``-2``).
+    Multi-sample runs average their samples, so a score may be fractional
+    and prints with two decimals (``3.67``, ``-0.33``).
+    """
+    if value is None:
+        return "-"
+    if float(value).is_integer():
+        return f"{int(value):+d}" if signed else str(int(value))
+    return f"{value:+.2f}" if signed else f"{value:.2f}"
 
 
 def render_markdown(comparison: ComparisonResult) -> str:
@@ -275,6 +358,11 @@ def render_markdown(comparison: ComparisonResult) -> str:
     )
     lines.append(f"**Golden Set:** {comparison.golden_set_name}  ")
     lines.append(f"**Score Threshold:** {comparison.threshold:g}  ")
+    if comparison.baseline_samples > 1 or comparison.candidate_samples > 1:
+        lines.append(
+            f"**Samples per Test Case:** baseline {comparison.baseline_samples}, "
+            f"candidate {comparison.candidate_samples} (scores are per-case means)  "
+        )
     lines.append("")
 
     lines.append("## Model Summary")
@@ -312,11 +400,9 @@ def render_markdown(comparison: ComparisonResult) -> str:
                 "| {tc} | {model} | {before} | {after} | {delta} | {reason} |".format(
                     tc=case.test_case_id,
                     model=case.model,
-                    before=case.baseline_score if case.baseline_score is not None else "-",
-                    after=case.candidate_score if case.candidate_score is not None else "-",
-                    delta=(
-                        f"{case.score_delta:+d}" if case.score_delta is not None else "-"
-                    ),
+                    before=format_score(case.baseline_score),
+                    after=format_score(case.candidate_score),
+                    delta=format_score(case.score_delta, signed=True),
                     reason=case.reason,
                 )
             )
@@ -333,11 +419,9 @@ def render_markdown(comparison: ComparisonResult) -> str:
                 "| {tc} | {model} | {before} | {after} | {delta} | {reason} |".format(
                     tc=case.test_case_id,
                     model=case.model,
-                    before=case.baseline_score if case.baseline_score is not None else "-",
-                    after=case.candidate_score if case.candidate_score is not None else "-",
-                    delta=(
-                        f"{case.score_delta:+d}" if case.score_delta is not None else "-"
-                    ),
+                    before=format_score(case.baseline_score),
+                    after=format_score(case.candidate_score),
+                    delta=format_score(case.score_delta, signed=True),
                     reason=case.reason,
                 )
             )

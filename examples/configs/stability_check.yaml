@@ -1,0 +1,39 @@
+# Stability check: run every test case several times and measure the spread.
+#
+# Use this when a single run is not enough to tell a regression from noise:
+#   promptlens run examples/configs/stability_check.yaml
+#   promptlens run examples/configs/stability_check.yaml --fail-under 3.5 --fail-on-flaky
+#
+# With samples > 1 the report adds pass@k (passed at least once), pass^k
+# (passed every time), flaky cases, and a confidence interval on the mean
+# score. Each sample is a separate model call and judge call, so cost scales
+# with the sample count.
+
+golden_set: ./examples/golden_sets/customer_support.yaml
+
+models:
+  - name: "Claude 3.5 Sonnet"
+    provider: anthropic
+    model: claude-3-5-sonnet-20241022
+    temperature: 0.7
+    max_tokens: 1024
+
+judge:
+  provider: anthropic
+  model: claude-3-5-sonnet-20241022
+  temperature: 0.3
+
+execution:
+  parallel_requests: 5
+  retry_attempts: 3
+  timeout_seconds: 60
+  samples: 5                        # Runs per test case; --samples on the CLI overrides this
+
+output:
+  directory: ./promptlens_results
+  formats:
+    - html
+    - json
+    - md
+    - junit
+  run_name: "Customer Support - Stability Check (5 samples)"
