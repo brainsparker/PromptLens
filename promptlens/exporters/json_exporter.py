@@ -6,6 +6,7 @@ from pathlib import Path
 
 from promptlens.exporters.base import BaseExporter
 from promptlens.models.result import RunResult
+from promptlens.stability import compute_stability
 
 logger = logging.getLogger(__name__)
 
@@ -24,6 +25,12 @@ class JSONExporter(BaseExporter):
 
         # Convert to dict and serialize
         data = result.model_dump(mode="json")
+
+        # Multi-sample runs carry their stability analysis alongside the raw
+        # results so downstream tools do not have to recompute it. RunResult
+        # ignores the extra key when the file is loaded back.
+        if result.sample_count > 1:
+            data["stability"] = compute_stability(result).model_dump(mode="json")
 
         with open(path, "w", encoding="utf-8") as f:
             json.dump(data, f, indent=2, ensure_ascii=False, default=str)

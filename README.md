@@ -23,6 +23,7 @@ PromptLens runs golden test sets against multiple models, scores outputs using L
 - **Multiple Export Formats** - HTML, JSON, CSV, Markdown, and JUnit XML outputs
 - **CI-Native Quality Gates** - JUnit XML reports plus a `--fail-under` score gate that fails the build on quality regressions
 - **Cross-Run Comparison** - Diff any two runs by test case and model with score, cost, and latency deltas, plus a `--fail-on-regression` CI gate
+- **Multi-Sample Stability** - Run each test case N times with `--samples`, get pass@k, pass^k, per-case score spread and flaky-case detection, plus a `--fail-on-flaky` CI gate
 - **Parallel Execution** - Async execution with configurable concurrency and retry logic
 - **Portable & Local** - No cloud backend, all data stays on your machine
 - **Easy to Extend** - Plugin architecture for custom providers, judges, and exporters
@@ -161,6 +162,9 @@ promptlens run my_config.yaml
 ```bash
 # Run evaluation
 promptlens run <config.yaml>
+
+# Run each test case 5 times and report pass@5, pass^5, and flaky cases
+promptlens run <config.yaml> --samples 5
 
 # Validate a golden set
 promptlens validate <golden_set.yaml>
@@ -304,6 +308,7 @@ execution:
   parallel_requests: 3              # Concurrent API calls
   retry_attempts: 3                 # Retries for failed requests
   timeout_seconds: 60               # Request timeout
+  samples: 1                        # Runs per test case (2+ enables stability analysis)
 ```
 
 ### Output
@@ -350,6 +355,54 @@ Example GitHub Actions step:
 ```
 
 The same `junit.xml` works with GitLab (`artifacts:reports:junit`), Jenkins, CircleCI, and any other JUnit-compatible report viewer.
+
+---
+
+## Multi-Sample Runs (Stability and Flaky Cases)
+
+A single run per test case is a single draw from a distribution. Model sampling, provider-side model updates, inference nondeterminism (even at temperature 0) and the LLM judge itself all add noise, so one score cannot tell a real regression from a bad roll. Multi-sample runs measure the spread instead of trusting one sample.
+
+```bash
+# Run every test case 5 times per model
+promptlens run config.yaml --samples 5
+
+# Or set it in the config
+# execution:
+#   samples: 5
+```
+
+With `--samples` above 1 the run summary, the HTML and Markdown reports, and `results.json` gain a stability section:
+
+| Metric | Meaning |
+|--------|---------|
+| **pass@k** | Share of test cases that passed in at least one of k samples. Optimistic bound: what the model can do. |
+| **pass^k** | Share of test cases that passed in every sample. Pessimistic bound: what the model reliably does. Gate releases on this one. |
+| **Flaky cases** | Test cases that passed in some samples and failed in others. The gap between pass@k and pass^k is made of these. |
+| **Mean score (95% CI)** | Mean judge score over all samples with a normal-approximation confidence interval, so two averages that differ by less than their own uncertainty are not read as a change. |
+| **Within-case std dev** | How much a single test case's score moves between samples. |
+
+A sample passes when its judge score is at or above the pass threshold: `--fail-under` when given, otherwise 3.0 (the same line the JUnit exporter uses).
+
+### Gating CI on stability
+
+```bash
+promptlens run config.yaml --samples 5 --fail-under 3.5 --fail-on-flaky
+```
+
+- `--fail-under` still gates on the average score across all samples.
+- `--fail-on-flaky` exits with code 2 if any test case flipped between pass and fail across its samples. A case that fails every time is a quality problem for `--fail-under`; a case that flips is a reliability problem, and this flag catches it.
+- Both gates are evaluated and reported before the single exit, so one CI log shows every problem.
+
+### How the other outputs change
+
+- **JUnit XML** still emits one test case per golden-set entry. The entry passes only when every scored sample passed (pass^k). A flaky entry is a `<failure type="FlakyJudgeScore">` whose message lists the per-sample scores; a consistently failing entry keeps `JudgeScoreBelowThreshold`. An entry errors only when every sample errored, so a transient API failure next to good samples is listed in `system-out` rather than failing the build.
+- **results.json** records `sample_index` on every result, `metadata.samples`, `metadata.pass_threshold`, and a top-level `stability` block with the per-model and per-case numbers above.
+- **CSV** gains a `sample_index` column.
+- **compare** aggregates multi-sample runs per (test case, model) before diffing: scores are per-case means, cost and latency are per-sample averages so they stay comparable with single-sample baselines, and a case counts as errored only when all of its samples errored. Fractional means print with two decimals.
+
+Sample counts are chosen per budget. Three samples catch cases that flip often; the research on agentic evals suggests around nine runs to reliably detect a 2 point change in pass rate. `--samples` multiplies the number of model and judge calls, so pair it with a cheap judge or a focused golden set for pull-request gates and reserve larger counts for nightly runs.
+
+See `examples/configs/stability_check.yaml` for a ready-made config.
 
 ---
 
@@ -657,6 +710,7 @@ class RuleBasedJudge(BaseJudge):
 - [x] JUnit XML export and `--fail-under` CI quality gate
 - [x] Parallel execution with retry logic
 - [x] Cross-run comparison with `--fail-on-regression` CI gate
+- [x] Multi-sample runs with pass@k, pass^k, flaky-case detection and `--fail-on-flaky` CI gate
 - [ ] Multi-judge consensus scoring
 - [ ] Synthetic test case generation
 - [ ] Historical trend tracking across many runs

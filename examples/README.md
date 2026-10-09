@@ -44,6 +44,11 @@ Configuration files define how evaluations are run, including which models to te
    - Useful for cost-effective testing and privacy-sensitive use cases
    - Requires Ollama running locally
 
+4. **`stability_check.yaml`** - Multi-sample stability run
+   - Runs every customer support case 5 times (`execution.samples: 5`)
+   - Reports pass@5, pass^5, flaky cases and a confidence interval on the mean score
+   - Pair with `--fail-under 3.5 --fail-on-flaky` to gate CI on reliability
+
 ## Quick Start
 
 ### 1. Set up API keys

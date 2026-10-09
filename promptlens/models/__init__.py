@@ -12,6 +12,11 @@ from promptlens.models.comparison import (
     ComparisonResult,
     ModelComparison,
 )
+from promptlens.models.stability import (
+    CaseStability,
+    ModelStability,
+    StabilityReport,
+)
 from promptlens.models.config import (
     ProviderConfig,
     ModelConfig,
@@ -31,6 +36,9 @@ __all__ = [
     "CaseComparison",
     "ModelComparison",
     "ComparisonResult",
+    "CaseStability",
+    "ModelStability",
+    "StabilityReport",
     "ProviderConfig",
     "ModelConfig",
     "JudgeConfig",

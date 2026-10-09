@@ -86,6 +86,10 @@
   .badge.s4 { background: var(--score-4); }
   .badge.s5 { background: var(--score-5); }
   .badge.none { background: var(--muted); }
+  .badge.flaky { background: var(--score-3); }
+  .sample { font-size: 12px; color: var(--muted); font-family: ui-monospace, SFMono-Regular, Menlo, monospace; }
+  .note { font-size: 13px; color: var(--muted); margin-bottom: 10px; }
+  .scores { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; }
 
   footer { margin-top: 36px; font-size: 12px; color: var(--muted); }
 </style>
@@ -104,6 +108,9 @@
 <div class="cards">
   <div class="card"><div class="label">Models</div><div class="value">{{ model_count }}</div></div>
   <div class="card"><div class="label">Test cases</div><div class="value">{{ test_case_count }}</div></div>
+  {% if samples > 1 %}
+  <div class="card"><div class="label">Samples per case</div><div class="value">{{ samples }}</div></div>
+  {% endif %}
   <div class="card"><div class="label">Total cost</div><div class="value">${{ "%.4f" | format(total_cost) }}</div></div>
   <div class="card"><div class="label">Total time</div><div class="value">{{ "%.1f" | format(total_time / 1000) }}s</div></div>
 </div>
@@ -149,16 +156,85 @@
   </tbody>
 </table>
 
+{% if stability %}
+<h2>Stability ({{ stability.samples }} samples per test case)</h2>
+<p class="note">
+  A sample passes when its judge score is at least {{ "%g" | format(stability.pass_threshold) }}.
+  pass@{{ stability.samples }} is the share of test cases that passed at least once (optimistic bound);
+  pass^{{ stability.samples }} is the share that passed every time (what the model reliably does).
+  Flaky cases both passed and failed.
+</p>
+<table>
+  <thead>
+    <tr>
+      <th>Model</th>
+      <th>pass@{{ stability.samples }}</th>
+      <th>pass^{{ stability.samples }}</th>
+      <th>Flaky cases</th>
+      <th>Mean score (95% CI)</th>
+      <th>Mean within-case std dev</th>
+    </tr>
+  </thead>
+  <tbody>
+    {% for m in stability.models %}
+    <tr>
+      <td><strong>{{ m.model }}</strong></td>
+      {% if m.scored_cases == 0 %}
+      <td colspan="5" class="note">No judge scores available</td>
+      {% else %}
+      <td>{{ "%.0f" | format(m.pass_at_k * 100) }}% <span class="sample">({{ m.pass_at_k_cases }}/{{ m.scored_cases }})</span></td>
+      <td>{{ "%.0f" | format(m.pass_hat_k * 100) }}% <span class="sample">({{ m.pass_hat_k_cases }}/{{ m.scored_cases }})</span></td>
+      <td>{% if m.flaky_cases %}<span class="badge flaky">{{ m.flaky_cases }}</span>{% else %}0{% endif %}</td>
+      <td>
+        {% if m.mean_score is not none and m.score_ci_low is not none %}
+        {{ "%.2f" | format(m.mean_score) }} <span class="sample">({{ "%.2f" | format(m.score_ci_low) }} to {{ "%.2f" | format(m.score_ci_high) }})</span>
+        {% else %}–{% endif %}
+      </td>
+      <td>{% if m.mean_case_std_dev is not none %}{{ "%.2f" | format(m.mean_case_std_dev) }}{% else %}–{% endif %}</td>
+      {% endif %}
+    </tr>
+    {% endfor %}
+  </tbody>
+</table>
+
+{% if stability.flaky_cases %}
+<h2>Flaky cases ({{ stability.flaky_cases | length }})</h2>
+<table>
+  <thead>
+    <tr>
+      <th>Test case</th>
+      <th>Model</th>
+      <th>Scores</th>
+      <th>Passed</th>
+      <th>Std dev</th>
+    </tr>
+  </thead>
+  <tbody>
+    {% for c in stability.flaky_cases %}
+    <tr>
+      <td class="case-id">{{ c.test_case_id }}</td>
+      <td>{{ c.model }}</td>
+      <td class="scores">{{ c.scores | join(", ") }}</td>
+      <td>{{ c.passed_samples }}/{{ c.scored_samples }}</td>
+      <td>{% if c.std_dev is not none %}{{ "%.2f" | format(c.std_dev) }}{% else %}–{% endif %}</td>
+    </tr>
+    {% endfor %}
+  </tbody>
+</table>
+{% endif %}
+{% endif %}
+
 <h2>Results by test case</h2>
 {% for case in test_cases %}
 <div class="case">
-  <div class="case-id">{{ case.id }}</div>
+  <div class="case-id">{{ case.id }}{% if case.flaky_models %} <span class="badge flaky">flaky: {{ case.flaky_models | join(", ") }}</span>{% endif %}</div>
   <div class="query">{{ case.query }}</div>
   <div class="expected"><strong>Expected:</strong> {{ case.expected_behavior }}</div>
   {% for r in case.model_results %}
   <div class="response">
     <div class="rhead">
       <span class="model">{{ r.model }}</span>
+      {% if samples > 1 %}<span class="sample">sample {{ r.sample_index + 1 }}/{{ samples }}</span>{% endif %}
       <span class="provider">{{ r.provider }}</span>
       {% if r.score is not none %}
       <span class="badge s{{ r.score }}">{{ r.score }}/5</span>
