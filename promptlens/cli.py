@@ -277,6 +277,184 @@ def validate(golden_set: str) -> None:
         sys.exit(1)
 
 
+@cli.command("import")
+@click.argument("source", type=click.Path(exists=True, dir_okay=False))
+@click.option(
+    "-o",
+    "--output",
+    "output_path",
+    type=click.Path(dir_okay=False),
+    required=True,
+    help="Golden set to write (.yaml or .json). With --append, the file to extend.",
+)
+@click.option(
+    "--format",
+    "source_format",
+    type=click.Choice(["auto", "otel", "openai", "jsonl"]),
+    default="auto",
+    show_default=True,
+    help="Source format: OpenTelemetry GenAI spans, OpenAI-style request logs, or generic rows",
+)
+@click.option("--name", default=None, help="Golden set name (default: derived from the source file)")
+@click.option("--prefix", default="prod", show_default=True, help="Prefix for generated test case ids")
+@click.option("--limit", type=click.IntRange(min=1), default=None, help="Keep at most this many cases")
+@click.option(
+    "--sort",
+    type=click.Choice(["signal", "tokens", "recent", "random"]),
+    default="signal",
+    show_default=True,
+    help="Ranking before --limit: failures and tool trouble first, heaviest first, newest first, or random",
+)
+@click.option("--seed", type=int, default=0, show_default=True, help="Seed for --sort random")
+@click.option(
+    "--reference-answer",
+    type=click.Choice(["clean", "always", "never"]),
+    default="clean",
+    show_default=True,
+    help="When to keep the production response as reference_answer",
+)
+@click.option("--include-history", is_flag=True, help="Prepend earlier turns of multi-turn conversations to the query")
+@click.option("--expected-tool-calls", is_flag=True, help="Record the production tool calls as expected_tool_calls")
+@click.option("--no-scrub", is_flag=True, help="Do not replace emails, phones, cards, IPs, SSNs, or secrets")
+@click.option("--drop-errors", is_flag=True, help="Skip failed runs instead of importing them as tagged cases")
+@click.option(
+    "--exclude-id",
+    "exclude_ids",
+    multiple=True,
+    help="Regex matched against source ids to drop test or seeded traffic (repeatable)",
+)
+@click.option("--min-input-chars", type=click.IntRange(min=0), default=3, show_default=True)
+@click.option("--max-input-chars", type=click.IntRange(min=1), default=8000, show_default=True)
+@click.option("--category", default=None, help="Category for every imported case (default: production)")
+@click.option("--expected-behavior", default=None, help="Expected behavior text for every case (default: a REVIEW placeholder)")
+@click.option("--input-field", default=None, help="For --format jsonl: dotted path of the input column")
+@click.option("--output-field", default=None, help="For --format jsonl: dotted path of the output column")
+@click.option("--id-field", default=None, help="For --format jsonl: dotted path of the id column")
+@click.option("--append", is_flag=True, help="Extend an existing golden set, skipping cases already imported")
+@click.option("--dry-run", is_flag=True, help="Show what would be imported without writing")
+def import_traces(
+    source: str,
+    output_path: str,
+    source_format: str,
+    name: Optional[str],
+    prefix: str,
+    limit: Optional[int],
+    sort: str,
+    seed: int,
+    reference_answer: str,
+    include_history: bool,
+    expected_tool_calls: bool,
+    no_scrub: bool,
+    drop_errors: bool,
+    exclude_ids: tuple,
+    min_input_chars: int,
+    max_input_chars: int,
+    category: Optional[str],
+    expected_behavior: Optional[str],
+    input_field: Optional[str],
+    output_field: Optional[str],
+    id_field: Optional[str],
+    append: bool,
+    dry_run: bool,
+) -> None:
+    """Build a golden set from production traces.
+
+    Reads OpenTelemetry GenAI spans, OpenAI-style request logs, or generic
+    JSONL rows, then filters, deduplicates, scrubs personal data, tags cases
+    from telemetry (error, tool-error, thrash, truncated), ranks them, and
+    writes PromptLens test cases with provenance back to the source trace.
+
+    SOURCE: Path to the trace export (.json or .jsonl)
+
+    Examples:
+        promptlens import spans.json -o golden/prod.yaml --limit 50
+        promptlens import requests.jsonl -o golden/prod.yaml --sort tokens --exclude-id '^test-'
+        promptlens import spans.json -o golden/prod.yaml --append
+    """
+    try:
+        from rich.table import Table
+
+        from promptlens.importers import ImportOptions, build_golden_set, write_golden_set
+        from promptlens.loaders.yaml_loader import get_loader
+        from promptlens.models.test_case import GoldenSet
+
+        existing: Optional[GoldenSet] = None
+        if append:
+            if not Path(output_path).exists():
+                raise click.UsageError(f"--append given but {output_path} does not exist")
+            existing = get_loader(output_path).load(output_path)
+
+        options = ImportOptions(
+            name=name or f"Production traces: {Path(source).stem}",
+            source_file=source,
+            source_format=source_format,
+            prefix=prefix,
+            limit=limit,
+            sort=sort,
+            seed=seed,
+            include_history=include_history,
+            reference_answer=reference_answer,
+            expected_tool_calls=expected_tool_calls,
+            scrub=not no_scrub,
+            drop_errors=drop_errors,
+            min_input_chars=min_input_chars,
+            max_input_chars=max_input_chars,
+            exclude_id_patterns=list(exclude_ids),
+            category=category,
+            expected_behavior=expected_behavior,
+            input_field=input_field,
+            output_field=output_field,
+            id_field=id_field,
+        )
+
+        console.print(f"\n[cyan]Importing traces from {source}...[/cyan]")
+        golden_set, summary = build_golden_set(options, existing=existing)
+
+        table = Table(title=f"\nImport summary ({summary.source_format})")
+        table.add_column("Step", style="bold")
+        table.add_column("Count", justify="right")
+        table.add_row("Candidates seen", str(summary.candidates_seen))
+        if summary.skipped_existing:
+            table.add_row("Already in golden set", str(summary.skipped_existing))
+        for reason, count in sorted(summary.dropped.items()):
+            table.add_row(f"Dropped: {reason}", str(count))
+        table.add_row("[green]Kept[/green]", f"[green]{summary.kept}[/green]")
+        console.print(table)
+
+        if summary.tags:
+            tags = ", ".join(f"{tag} ({count})" for tag, count in sorted(summary.tags.items()))
+            console.print(f"  Tags: {tags}")
+        if summary.scrub.total:
+            scrubbed = ", ".join(
+                f"{placeholder} x{count}" for placeholder, count in sorted(summary.scrub.replacements.items())
+            )
+            console.print(f"  Scrubbed: {scrubbed}")
+
+        if summary.kept == 0 and existing is None:
+            console.print("\n[yellow]No usable cases found. Nothing written.[/yellow]")
+            sys.exit(1)
+
+        if dry_run:
+            console.print("\n[yellow]Dry run: nothing written.[/yellow]")
+            return
+
+        write_golden_set(golden_set, output_path)
+        console.print(
+            f"\n[green]✓[/green] Wrote {len(golden_set.test_cases)} test cases to {output_path}"
+            + (f" ({summary.kept} new)" if existing is not None else "")
+        )
+        console.print(
+            "  Every imported case has needs_review: true. Replace the REVIEW placeholder in "
+            "expected_behavior before using it as a regression gate."
+        )
+
+    except click.UsageError:
+        raise
+    except Exception as e:
+        console.print(f"[red]Import failed: {e}[/red]")
+        sys.exit(1)
+
+
 @cli.command()
 @click.option(
     "--output-dir",
