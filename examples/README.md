@@ -23,6 +23,19 @@ Golden sets are collections of test cases used to evaluate LLM performance. Each
    - 5 test cases for different summarization styles
    - Topics: bullet points, one-sentence summaries, comparisons, explanations
 
+## Trace Samples
+
+`traces/` holds small production-style exports for trying `promptlens import`:
+
+1. **`otel_genai_spans.json`** - OTLP/JSON spans following the OpenTelemetry GenAI semantic conventions: an agent run with a tool call, a refund run with repeated tool timeouts and a wrong-order refund, a rate-limited chat with no output, a near-duplicate query, a smoke-test trace, and an HTTP-wrapped chat loop that hit a length limit
+2. **`openai_requests.jsonl`** - OpenAI chat completion request/response log lines: a billing question containing a card number, a multi-turn cancellation that ends in a tool call, a two-character greeting, and a 500 error
+
+```bash
+promptlens import examples/traces/otel_genai_spans.json -o /tmp/prod.yaml --exclude-id '^test-'
+promptlens import examples/traces/openai_requests.jsonl -o /tmp/prod.yaml --append --include-history
+promptlens validate /tmp/prod.yaml
+```
+
 ## Configuration Files
 
 Configuration files define how evaluations are run, including which models to test, judge settings, and output options.

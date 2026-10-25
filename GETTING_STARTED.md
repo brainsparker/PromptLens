@@ -340,6 +340,16 @@ models:
 - Unclear expectations
 - Judge can't evaluate objectively
 
+### Start From Real Traffic
+
+The fastest way to a realistic golden set is to import it from production. If your app emits OpenTelemetry GenAI spans or logs its LLM requests, run:
+
+```bash
+promptlens import traces.json -o golden_sets/production.yaml --limit 30 --exclude-id '^test-'
+```
+
+Failed runs and tool errors are ranked first, duplicates are collapsed, personal data is replaced with placeholders, and every case keeps a link back to the source trace. Then open the file and replace each `REVIEW:` placeholder in `expected_behavior` with what a correct response does. Cases keep `needs_review: true` in their metadata until you do. See the README section "Building Golden Sets from Production Traces" for the full option list.
+
 ### How Many Test Cases?
 
 - **Start small**: 3-5 test cases

@@ -23,6 +23,7 @@ PromptLens runs golden test sets against multiple models, scores outputs using L
 - **Multiple Export Formats** - HTML, JSON, CSV, Markdown, and JUnit XML outputs
 - **CI-Native Quality Gates** - JUnit XML reports plus a `--fail-under` score gate that fails the build on quality regressions
 - **Cross-Run Comparison** - Diff any two runs by test case and model with score, cost, and latency deltas, plus a `--fail-on-regression` CI gate
+- **Golden Sets from Production Traces** - `promptlens import` turns OpenTelemetry GenAI spans or your own request logs into test cases: deduplicated, scrubbed of personal data, tagged from telemetry (errors, tool failures, thrash), with provenance back to the source trace
 - **Parallel Execution** - Async execution with configurable concurrency and retry logic
 - **Portable & Local** - No cloud backend, all data stays on your machine
 - **Easy to Extend** - Plugin architecture for custom providers, judges, and exporters
@@ -164,6 +165,9 @@ promptlens run <config.yaml>
 
 # Validate a golden set
 promptlens validate <golden_set.yaml>
+
+# Build a golden set from production traces (OTel GenAI spans or request logs)
+promptlens import <traces.json> -o <golden_set.yaml> --limit 50
 
 # List past runs
 promptlens list-runs
@@ -350,6 +354,49 @@ Example GitHub Actions step:
 ```
 
 The same `junit.xml` works with GitLab (`artifacts:reports:junit`), Jenkins, CircleCI, and any other JUnit-compatible report viewer.
+
+---
+
+## Building Golden Sets from Production Traces
+
+A golden set written in an afternoon tests what you feared in advance. A golden set grown from production tests what your system actually gets wrong. `promptlens import` reads the traces you already collect and turns them into reviewable test cases:
+
+```bash
+# OpenTelemetry GenAI spans (OTLP/JSON from the collector or the OTLP file exporter,
+# flat SDK span dumps, OpenLLMetry and OpenInference attribute styles are all accepted)
+promptlens import spans.json -o golden_sets/production.yaml --limit 50
+
+# Your own request logs: {"request": {...messages...}, "response": {...choices...}} per line,
+# OpenAI chat completions, Responses API, or Anthropic Messages shapes
+promptlens import requests.jsonl -o golden_sets/production.yaml --exclude-id '^test-'
+
+# Anything else with an input and output column
+promptlens import rows.jsonl -o golden_sets/production.yaml --format jsonl \
+  --input-field question --output-field answer --id-field conversation_id
+
+# Keep the set growing: skip traces already imported, dedupe against existing cases
+promptlens import spans.json -o golden_sets/production.yaml --append
+```
+
+What happens to each trace:
+
+1. **Filter.** Rows without an input are dropped. Rows without an output are dropped unless the run failed or made tool calls, because failures are the cases you want. Test and seeded traffic goes with `--exclude-id`.
+2. **Dedupe.** Inputs are compared after lowercasing, collapsing whitespace, and stripping punctuation, so fifty phrasings of "reset my password" become one case. With `--append`, new traces are also checked against the cases already in the file.
+3. **Scrub.** Emails, phone numbers, Luhn-valid card numbers, US SSNs, IP addresses, and API-key-shaped secrets are replaced with typed placeholders in the query, the response, and tool arguments. Each case records what was replaced. Disable with `--no-scrub`.
+4. **Tag from telemetry.** No labeling needed: `error`, `tool-error`, `repeated-tool-call`, `thrash` (six or more tool calls, or total tokens above the 90th percentile), `truncated` (finish reason was a length limit), `multi-turn`, `no-output`, `scrubbed`.
+5. **Rank and cut.** The default `--sort signal` puts failed runs first, then tool trouble, then the heaviest conversations, because that is where agents thrash. `--sort tokens`, `--sort recent`, and `--sort random --seed N` are also available. `--limit` keeps the set small enough for a pull request gate.
+6. **Write with provenance.** Every case carries `metadata.source_id`, the production model, tokens, cost, latency, finish reasons, and the full tool trajectory (name, arguments, truncated result, error flag). `expected_behavior` is a `REVIEW:` placeholder and `metadata.needs_review` is `true` until a person writes what correct looks like.
+
+The production response becomes `reference_answer` only when the run was clean (no error, no failed tool call). A broken answer is never promoted to the thing the judge compares against; it is kept in `metadata.production_output` instead. Change this with `--reference-answer always|never`.
+
+For agent traces, `--expected-tool-calls` copies the successful production tool calls into `expected_tool_calls` as a starting point for trajectory evaluation. `--include-history` prepends earlier turns of a multi-turn conversation to the query so the case is self-contained.
+
+Try it on the bundled samples:
+
+```bash
+promptlens import examples/traces/otel_genai_spans.json -o /tmp/prod.yaml --exclude-id '^test-'
+promptlens validate /tmp/prod.yaml
+```
 
 ---
 
